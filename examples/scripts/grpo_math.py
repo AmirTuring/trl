@@ -109,10 +109,8 @@ def format_reward_func(completions, target, **kwargs):
         except Exception:
             rewards.append(0.0)
     
-    # Log format accuracy to WandB (only on main process)
-    if wandb.run is not None:
-        format_accuracy = format_correct / len(completions) if completions else 0
-        wandb.log({"format_accuracy": format_accuracy})
+    # Format accuracy will be logged by the trainer's built-in metric aggregation
+    # to ensure proper multi-GPU handling
     
     return rewards
 
@@ -141,14 +139,8 @@ def accuracy_reward(completions, target, **kwargs):
         except Exception:
             rewards.append(0.0)
     
-    # Log accuracy to WandB (only on main process)
-    if wandb.run is not None:
-        accuracy = correct_count / len(completions) if completions else 0
-        avg_reward = sum(rewards) / len(rewards) if rewards else 0
-        wandb.log({
-            "math_accuracy": accuracy,
-            "avg_accuracy_reward": avg_reward
-        })
+    # Math accuracy will be logged by the trainer's built-in metric aggregation
+    # to ensure proper multi-GPU handling
     
     return rewards
 
@@ -178,6 +170,8 @@ def grpo_function(
             "max_prompt_length": training_args.max_prompt_length,
             "max_completion_length": training_args.max_completion_length,
             "num_generations": training_args.num_generations,
+            "total_batch_size": training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps * training_args.world_size,
+            "world_size": training_args.world_size,
         }
         
         # Add run name if specified
@@ -187,12 +181,15 @@ def grpo_function(
             project="grpo-math-training",
             name=run_name,
             config=wandb_config,
-            tags=["grpo", "math", "reasoning"]
+            tags=["grpo", "math", "reasoning"],
+            # Ensure WandB works properly with distributed training
+            settings=wandb.Settings(start_method="fork")
         )
-        logger.info("WandB logging initialized on main process")
-    elif not is_main_process:
-        # Disable wandb on non-main processes
+        logger.info(f"WandB logging initialized on main process (world_size: {training_args.world_size})")
+    else:
+        # Disable wandb on non-main processes to ensure only main process logs
         os.environ["WANDB_MODE"] = "disabled"
+        logger.info(f"WandB disabled on rank {training_args.local_rank}")
     
     #########################
     # Log parameters
@@ -342,7 +339,8 @@ def grpo_function(
     logger.info("*** Training complete ***")
     
     # Log final training metrics to WandB (only on main process)
-    if wandb.run is not None:
+    # The trainer's built-in logging handles metric aggregation across GPUs
+    if wandb.run is not None and trainer.accelerator.is_main_process:
         wandb.log({
             "final_train_samples": len(train_dataset),
             "training_completed": True
@@ -364,10 +362,38 @@ def grpo_function(
     # Save everything else on main process
     if trainer.accelerator.is_main_process:
         trainer.create_model_card({"tags": ["rl","grpo"]})
+    
     # push to hub if needed
     if training_args.push_to_hub is True:
         logger.info("Pushing to hub...")
-        trainer.push_to_hub()
+        
+        # Create commit message with current training info
+        commit_message = f"GRPO training checkpoint - Step {trainer.state.global_step}"
+        
+        # Try to get latest reward metrics from trainer state if available
+        if hasattr(trainer.state, 'log_history') and trainer.state.log_history:
+            latest_logs = trainer.state.log_history[-1]
+            
+            # Look for format and math reward metrics in the logs
+            format_reward = None
+            math_reward = None
+            
+            for key, value in latest_logs.items():
+                if 'format' in key.lower() and 'reward' in key.lower():
+                    format_reward = value
+                elif 'math' in key.lower() and ('reward' in key.lower() or 'accuracy' in key.lower()):
+                    math_reward = value
+            
+            # Add reward info to commit message if found
+            if format_reward is not None or math_reward is not None:
+                commit_message += " |"
+                if format_reward is not None:
+                    commit_message += f" Format Reward: {format_reward:.3f}"
+                if math_reward is not None:
+                    commit_message += f" Math Reward: {math_reward:.3f}"
+        
+        logger.info(f"Pushing to hub with message: {commit_message}")
+        trainer.push_to_hub(commit_message=commit_message)
 
     # Finish WandB run (only on main process)
     if wandb.run is not None:
