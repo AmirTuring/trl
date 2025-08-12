@@ -109,9 +109,10 @@ def format_reward_func(completions, target, **kwargs):
         except Exception:
             rewards.append(0.0)
     
-    # Log format accuracy to WandB
-    format_accuracy = format_correct / len(completions) if completions else 0
-    wandb.log({"format_accuracy": format_accuracy})
+    # Log format accuracy to WandB (only on main process)
+    if wandb.run is not None:
+        format_accuracy = format_correct / len(completions) if completions else 0
+        wandb.log({"format_accuracy": format_accuracy})
     
     return rewards
 
@@ -140,13 +141,14 @@ def accuracy_reward(completions, target, **kwargs):
         except Exception:
             rewards.append(0.0)
     
-    # Log accuracy to WandB
-    accuracy = correct_count / len(completions) if completions else 0
-    avg_reward = sum(rewards) / len(rewards) if rewards else 0
-    wandb.log({
-        "math_accuracy": accuracy,
-        "avg_accuracy_reward": avg_reward
-    })
+    # Log accuracy to WandB (only on main process)
+    if wandb.run is not None:
+        accuracy = correct_count / len(completions) if completions else 0
+        avg_reward = sum(rewards) / len(rewards) if rewards else 0
+        wandb.log({
+            "math_accuracy": accuracy,
+            "avg_accuracy_reward": avg_reward
+        })
     
     return rewards
 
@@ -162,9 +164,11 @@ def grpo_function(
     model_args: ModelConfig, script_args: ScriptArguments, training_args: GRPOConfig, dataset_args: DatasetMixtureConfig
 ):
     #########################
-    # Initialize WandB logging
+    # Initialize WandB logging (only on main process)
     #########################
-    if hasattr(training_args, 'report_to') and 'wandb' in training_args.report_to:
+    is_main_process = training_args.local_rank in [-1, 0]
+    
+    if hasattr(training_args, 'report_to') and 'wandb' in training_args.report_to and is_main_process:
         wandb_config = {
             "model": model_args.model_name_or_path,
             "learning_rate": training_args.learning_rate,
@@ -185,7 +189,10 @@ def grpo_function(
             config=wandb_config,
             tags=["grpo", "math", "reasoning"]
         )
-        logger.info("WandB logging initialized")
+        logger.info("WandB logging initialized on main process")
+    elif not is_main_process:
+        # Disable wandb on non-main processes
+        os.environ["WANDB_MODE"] = "disabled"
     
     #########################
     # Log parameters
@@ -334,11 +341,12 @@ def grpo_function(
 
     logger.info("*** Training complete ***")
     
-    # Log final training metrics to WandB
-    wandb.log({
-        "final_train_samples": len(train_dataset),
-        "training_completed": True
-    })
+    # Log final training metrics to WandB (only on main process)
+    if wandb.run is not None:
+        wandb.log({
+            "final_train_samples": len(train_dataset),
+            "training_completed": True
+        })
 
     ##################################
     # Save model and create model card
@@ -361,9 +369,10 @@ def grpo_function(
         logger.info("Pushing to hub...")
         trainer.push_to_hub()
 
-    # Finish WandB run
-    wandb.finish()
-    logger.info("WandB logging finished")
+    # Finish WandB run (only on main process)
+    if wandb.run is not None:
+        wandb.finish()
+        logger.info("WandB logging finished")
 
     logger.info("*** Training complete! ***")
 

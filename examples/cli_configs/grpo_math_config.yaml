@@ -34,7 +34,7 @@ warmup_ratio: 0.03
 # GRPO specific parameters
 beta: 0.001
 max_prompt_length: 512
-max_completion_length: 4096
+max_completion_length: 2048
 num_generations: 8
 
 # VLLM configuration for fast generation
@@ -57,7 +57,8 @@ use_peft: false
 # Reporting
 report_to: 
   - wandb
-run_name: grpo-math-training
+run_name: grpo-qwen-2.5-1.5b
+project_name: grpo-math-training
 
 # Hugging Face Hub
 push_to_hub: true
