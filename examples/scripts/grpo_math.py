@@ -23,12 +23,21 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from dotenv import load_dotenv
+load_dotenv()
+
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 
 from transformers.trainer_utils import get_last_checkpoint
 from transformers import AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer, get_peft_config, ModelConfig, TrlParser, DatasetMixtureConfig, get_dataset
 from math_verify import LatexExtractionConfig, parse, verify
+import wandb
+
+# Login to WandB using environment variable
+wandb_token = os.getenv("WANDB_API_KEY")
+if wandb_token:
+    wandb.login(key=wandb_token)
 
 ########################
 # Setup logging
@@ -73,6 +82,7 @@ def format_reward_func(completions, target, **kwargs):
         list[float]: Reward scores (1.0 for correct format, 0.0 otherwise)
     """
     rewards = []
+    format_correct = 0
 
     for completion in completions:
         try:
@@ -93,16 +103,23 @@ def format_reward_func(completions, target, **kwargs):
             # Award 1.0 if format is correct, 0.0 otherwise
             if match is not None and len(match.groups()) == 2:
                 rewards.append(1.0)
+                format_correct += 1
             else:
                 rewards.append(0.0)
         except Exception:
             rewards.append(0.0)
+    
+    # Log format accuracy to WandB
+    format_accuracy = format_correct / len(completions) if completions else 0
+    wandb.log({"format_accuracy": format_accuracy})
     
     return rewards
 
 def accuracy_reward(completions, target, **kwargs):
     """Reward function that checks if the completion is the same as the ground truth."""
     rewards = []
+    correct_count = 0
+    
     for completion, solution in zip(completions, target):
         try:
             # Parse the solution and completion using math_verify
@@ -111,13 +128,26 @@ def accuracy_reward(completions, target, **kwargs):
             
             if len(gold_parsed) != 0:
                 try:
-                    rewards.append(float(verify(answer_parsed, gold_parsed)))
+                    reward = float(verify(answer_parsed, gold_parsed))
+                    rewards.append(reward)
+                    if reward > 0.5:  # Consider as correct if reward > 0.5
+                        correct_count += 1
                 except Exception:
                     rewards.append(0.0)
             else:
                 rewards.append(1.0)
+                correct_count += 1
         except Exception:
             rewards.append(0.0)
+    
+    # Log accuracy to WandB
+    accuracy = correct_count / len(completions) if completions else 0
+    avg_reward = sum(rewards) / len(rewards) if rewards else 0
+    wandb.log({
+        "math_accuracy": accuracy,
+        "avg_accuracy_reward": avg_reward
+    })
+    
     return rewards
 
 
@@ -131,6 +161,32 @@ def get_checkpoint(training_args: GRPOConfig):
 def grpo_function(
     model_args: ModelConfig, script_args: ScriptArguments, training_args: GRPOConfig, dataset_args: DatasetMixtureConfig
 ):
+    #########################
+    # Initialize WandB logging
+    #########################
+    if hasattr(training_args, 'report_to') and 'wandb' in training_args.report_to:
+        wandb_config = {
+            "model": model_args.model_name_or_path,
+            "learning_rate": training_args.learning_rate,
+            "batch_size": training_args.per_device_train_batch_size,
+            "num_epochs": training_args.num_train_epochs,
+            "beta": training_args.beta,
+            "max_prompt_length": training_args.max_prompt_length,
+            "max_completion_length": training_args.max_completion_length,
+            "num_generations": training_args.num_generations,
+        }
+        
+        # Add run name if specified
+        run_name = getattr(training_args, 'run_name', 'grpo-math-training')
+        
+        wandb.init(
+            project="grpo-math-training",
+            name=run_name,
+            config=wandb_config,
+            tags=["grpo", "math", "reasoning"]
+        )
+        logger.info("WandB logging initialized")
+    
     #########################
     # Log parameters
     #########################
@@ -200,8 +256,8 @@ def grpo_function(
             return {"prompt": f"Solve: {question}\nThink step by step.\n<think>", "target": answer}
     
     # Get field mapping configuration
-    question_field = script_args.field_mapping.question_field
-    answer_field = script_args.field_mapping.answer_field
+    question_field = script_args.field_mapping.get("question_field")
+    answer_field = script_args.field_mapping.get("answer_field")
     
     logger.info(f"Using field mapping - Question: '{question_field}', Answer: '{answer_field}'")
     
@@ -277,6 +333,12 @@ def grpo_function(
     trainer.save_state()
 
     logger.info("*** Training complete ***")
+    
+    # Log final training metrics to WandB
+    wandb.log({
+        "final_train_samples": len(train_dataset),
+        "training_completed": True
+    })
 
     ##################################
     # Save model and create model card
@@ -298,6 +360,10 @@ def grpo_function(
     if training_args.push_to_hub is True:
         logger.info("Pushing to hub...")
         trainer.push_to_hub()
+
+    # Finish WandB run
+    wandb.finish()
+    logger.info("WandB logging finished")
 
     logger.info("*** Training complete! ***")
 

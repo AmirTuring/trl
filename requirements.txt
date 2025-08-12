@@ -3,3 +3,5 @@ datasets
 transformers
 math-verify
 vllm
+wandb
+hf_transfer
