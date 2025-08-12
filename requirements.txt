@@ -1,3 +1,5 @@
-accelerate>=1.4.0
-datasets>=3.0.0
-transformers>=4.55.0
+accelerate
+datasets
+transformers
+math-verify
+vllm
