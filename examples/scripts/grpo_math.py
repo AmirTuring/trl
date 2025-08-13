@@ -31,7 +31,7 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 from transformers.trainer_utils import get_last_checkpoint
 from transformers import AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer, get_peft_config, ModelConfig, TrlParser, DatasetMixtureConfig, get_dataset
-from math_verify import LatexExtractionConfig, parse, verify
+from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
 import wandb
 
 # Login to WandB using environment variable
@@ -115,29 +115,42 @@ def format_reward_func(completions, target, **kwargs):
     return rewards
 
 def accuracy_reward(completions, target, **kwargs):
-    """Reward function that checks if the completion is the same as the ground truth."""
-    rewards = []
-    correct_count = 0
+    """
+    Reward function that evaluates mathematical correctness using math_verify.
     
-    for completion, solution in zip(completions, target):
+    Args:
+        completions (list[str]): Generated outputs containing <answer>...</answer>
+        target (list[str]): Ground truth answers
+        
+    Returns:
+        list[float]: Reward scores (1.0 for correct, 0.0 for incorrect)
+    """
+    
+    verify_func = math_metric(
+        gold_extraction_target=(LatexExtractionConfig(),),
+        pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
+    )
+    
+    rewards = []
+    
+    for completion, ground_truth in zip(completions, target):
+        reward = 0.0
         try:
-            completion_answer = completion.split("<answer>")[1].split("</answer>")[0]
-            # Parse the solution and completion using math_verify
-            gold_parsed = parse(solution)
-            answer_parsed = parse(completion_answer)
+            # Extract answer from completion
+            completion_answer = completion.split("<answer>")[1].split("</answer>")[0].strip()
             
-            if len(gold_parsed) != 0:
-                try:
-                    reward = float(verify(answer_parsed, gold_parsed))
-                    rewards.append(reward)
-                    if reward > 0.9:  # Consider as correct if reward > 0.9
-                        correct_count += 1
-                except Exception:
-                    rewards.append(0.0)
-            else:
-                rewards.append(0.0)
+            # Wrap ground truth in \boxed{} format for verification
+            ground_truth_boxed = "\\boxed{" + ground_truth + "}"
+            
+            # Compute verification score
+            score, _ = verify_func([ground_truth_boxed], [completion_answer])
+            reward = float(score)
+            
         except Exception:
-            rewards.append(0.0)
+            reward = 0.0
+            
+        rewards.append(reward)
+    
     return rewards
 
 
@@ -239,7 +252,7 @@ def grpo_function(
                 "role": "system",
                 "content": "You are a helpful assistant. You first think about the reasoning process in your mind and then provide the user with the answer."
               },
-              { 
+              {
                 "role": "user",
                 "content": f"{question}\n\nShow your work in <think> </think> tags. Return the final answer in \\boxed{{}} format inside <answer> </answer> tags. Think step by step inside <think> tags."
               },
