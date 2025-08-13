@@ -121,27 +121,23 @@ def accuracy_reward(completions, target, **kwargs):
     
     for completion, solution in zip(completions, target):
         try:
+            completion_answer = completion.split("<answer>")[1].split("</answer>")[0]
             # Parse the solution and completion using math_verify
-            gold_parsed = parse(solution, extraction_mode="first_match", extraction_config=[LatexExtractionConfig()])
-            answer_parsed = parse(completion, extraction_mode="first_match", extraction_config=[LatexExtractionConfig()])
+            gold_parsed = parse(solution)
+            answer_parsed = parse(completion_answer)
             
             if len(gold_parsed) != 0:
                 try:
                     reward = float(verify(answer_parsed, gold_parsed))
                     rewards.append(reward)
-                    if reward > 0.5:  # Consider as correct if reward > 0.5
+                    if reward > 0.9:  # Consider as correct if reward > 0.9
                         correct_count += 1
                 except Exception:
                     rewards.append(0.0)
             else:
-                rewards.append(1.0)
-                correct_count += 1
+                rewards.append(0.0)
         except Exception:
             rewards.append(0.0)
-    
-    # Math accuracy will be logged by the trainer's built-in metric aggregation
-    # to ensure proper multi-GPU handling
-    
     return rewards
 
 
@@ -235,27 +231,27 @@ def grpo_function(
         logger.error(f"Failed to load dataset: {e}")
         raise
         
-    # Generate R1-style prompt for mathematical reasoning
-    def generate_math_r1_prompt(question, answer):
-        """Generate R1-style prompt with step-by-step thinking format."""
+    # Generate prompt for mathematical reasoning
+    def generate_math_prompt(question, answer):
+        """Generate prompt with step-by-step thinking format."""
         try:
-            r1_prefix = [{
+            conversation = [{
                 "role": "system",
                 "content": "You are a helpful assistant. You first think about the reasoning process in your mind and then provide the user with the answer."
               },
               { 
                 "role": "user",
-                "content": f"{question} Show your work in <think> </think> tags. And return the final answer in <answer> </answer> tags. Think step by step inside <think> tags."
+                "content": f"{question}\n\nShow your work in <think> </think> tags. Return the final answer in \\boxed{{}} format inside <answer> </answer> tags. Think step by step inside <think> tags."
               },
               {
                 "role": "assistant",
                 "content": "Let me solve this step by step.\n<think>"
               }]
             
-            prompt = tokenizer.apply_chat_template(r1_prefix, tokenize=False, continue_final_message=True)
+            prompt = tokenizer.apply_chat_template(conversation, tokenize=False, continue_final_message=True)
             return {"prompt": prompt, "target": answer}
         except Exception as e:
-            logger.error(f"Error generating R1 prompt: {e}")
+            logger.error(f"Error generating math prompt: {e}")
             # Fallback to simple format
             return {"prompt": f"Solve: {question}\nThink step by step.\n<think>", "target": answer}
     
@@ -271,7 +267,7 @@ def grpo_function(
         question = row[question_field]
         answer = row[answer_field]
         
-        prompt_data = generate_math_r1_prompt(question, answer)
+        prompt_data = generate_math_prompt(question, answer)
         
         return prompt_data  # Return only {"prompt": prompt, "target": answer}
     
