@@ -1,3 +1,4 @@
+trl
 accelerate
 datasets
 transformers
