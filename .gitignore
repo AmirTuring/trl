@@ -12,6 +12,9 @@ tags
 
 runs/
 
+temp.ipynb
+*.ipynb
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
