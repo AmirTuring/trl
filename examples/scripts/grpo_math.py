@@ -30,7 +30,7 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 
 from transformers.trainer_utils import get_last_checkpoint
 from transformers import AutoTokenizer
-from trl import GRPOConfig, GRPOTrainer, get_peft_config, ModelConfig, TrlParser, DatasetMixtureConfig, get_dataset
+from trl import GRPOConfig, GRPOTrainer, get_peft_config, ModelConfig, TrlParser, DatasetMixtureConfig, get_dataset, ScriptArguments as TrlScriptArguments
 from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
 import wandb
 
@@ -61,7 +61,7 @@ class FieldMappingConfig:
     answer_field: str = "answer"
 
 @dataclass
-class ScriptArguments:
+class ScriptArguments(TrlScriptArguments):
     tokenizer_name_or_path: str = None
     dataset_seed: int = 42
     field_mapping: FieldMappingConfig = field(default_factory=FieldMappingConfig)
@@ -72,7 +72,7 @@ class ScriptArguments:
 
 def format_reward_func(completions, target, **kwargs):
     """
-    Evaluates completions based on correct format: <think>...</think><answer>...</answer>
+    Evaluates completions based on correct format: exactly one <think>...</think> followed by exactly one \\boxed{} answer
     
     Args:
         completions (list[str]): Generated outputs
@@ -82,7 +82,6 @@ def format_reward_func(completions, target, **kwargs):
         list[float]: Reward scores (1.0 for correct format, 0.0 otherwise)
     """
     rewards = []
-    format_correct = 0
 
     for completion in completions:
         try:
@@ -96,21 +95,34 @@ def format_reward_func(completions, target, **kwargs):
                     f.write(f"\n\n==============\n")
                     f.write(completion)
             
-            # Check if the format is correct
-            regex = r"^<think>([^<]*(?:<(?!/?think>)[^<]*)*)<\/think>\n<answer>([\s\S]*?)<\/answer>$"
-            match = re.search(regex, completion, re.DOTALL) 
+            # Check for exactly one <think> and one </think>
+            think_open_count = completion.count("<think>")
+            think_close_count = completion.count("</think>")
             
-            # Award 1.0 if format is correct, 0.0 otherwise
-            if match is not None and len(match.groups()) == 2:
+            if think_open_count != 1 or think_close_count != 1:
+                rewards.append(0.0)
+                continue
+                
+            # Extract the think section and find where it ends
+            think_match = re.search(r"<think>(.*?)<\/think>", completion, re.DOTALL)
+            if not think_match:
+                rewards.append(0.0)
+                continue
+                
+            # Extract the part after </think>
+            after_think = completion[think_match.end():]
+            
+            # Count \boxed{} occurrences in the entire completion
+            boxed_count = len(re.findall(r"\\boxed\{", completion))
+            
+            # Check if there's exactly one \boxed{} and it appears after </think>
+            if boxed_count == 1 and "\\boxed{" in after_think:
                 rewards.append(1.0)
-                format_correct += 1
             else:
                 rewards.append(0.0)
+                
         except Exception:
             rewards.append(0.0)
-    
-    # Format accuracy will be logged by the trainer's built-in metric aggregation
-    # to ensure proper multi-GPU handling
     
     return rewards
 
@@ -119,13 +131,12 @@ def accuracy_reward(completions, target, **kwargs):
     Reward function that evaluates mathematical correctness using math_verify.
     
     Args:
-        completions (list[str]): Generated outputs containing <answer>...</answer>
+        completions (list[str]): Generated outputs containing \\boxed{} answers
         target (list[str]): Ground truth answers
         
     Returns:
         list[float]: Reward scores (1.0 for correct, 0.0 for incorrect)
     """
-    
     verify_func = math_metric(
         gold_extraction_target=(LatexExtractionConfig(),),
         pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
@@ -134,24 +145,48 @@ def accuracy_reward(completions, target, **kwargs):
     rewards = []
     
     for completion, ground_truth in zip(completions, target):
-        reward = 0.0
         try:
-            # Extract answer from completion
-            completion_answer = completion.split("<answer>")[1].split("</answer>")[0].strip()
+            # Extract answer from \boxed{} format
+            completion_answer = _extract_boxed_answer(completion)
+            
+            completion_answer = "\\boxed{" + completion_answer + "}"
             
             # Wrap ground truth in \boxed{} format for verification
             ground_truth_boxed = "\\boxed{" + ground_truth + "}"
             
-            # Compute verification score
-            score, _ = verify_func([ground_truth_boxed], [completion_answer])
-            reward = float(score)
-            
+            # First try exact match (case-insensitive)
+            if ground_truth_boxed.strip().lower() == completion_answer.strip().lower():
+                reward = 1.0
+            else:
+                # Use math verification for semantic comparison
+                score, _ = verify_func([ground_truth_boxed], [completion_answer])
+                reward = float(score)
+                
         except Exception:
             reward = 0.0
             
         rewards.append(reward)
     
     return rewards
+
+
+def _extract_boxed_answer(completion):
+    """Extract answer from \\boxed{} format, handling nested braces."""
+    if "\\boxed{" not in completion:
+        return completion
+    
+    start_idx = completion.find("\\boxed{") + 7
+    brace_count = 1
+    end_idx = start_idx
+    
+    while end_idx < len(completion) and brace_count > 0:
+        if completion[end_idx] == '{':
+            brace_count += 1
+        elif completion[end_idx] == '}':
+            brace_count -= 1
+        end_idx += 1
+    
+    return completion[start_idx:end_idx-1].strip()
 
 
 def get_checkpoint(training_args: GRPOConfig):
@@ -234,11 +269,13 @@ def grpo_function(
             raise ValueError("No datasets specified in configuration. Please provide a YAML config with datasets.")
         
         # Get training dataset (no validation needed for RL training)
-        train_dataset = dataset.get("train")
+        # Use the configurable dataset split from script arguments
+        train_dataset = dataset.get(script_args.dataset_train_split)
         if train_dataset is None:
-            raise ValueError("No training dataset found. Please ensure your dataset has a 'train' split.")
+            available_splits = list(dataset.keys())
+            raise ValueError(f"No dataset found for split '{script_args.dataset_train_split}'. Available splits: {available_splits}")
         
-        logger.info(f"Training dataset size: {len(train_dataset)}")
+        logger.info(f"Training dataset size: {len(train_dataset)} (using split: '{script_args.dataset_train_split}')")
         
     except Exception as e:
         logger.error(f"Failed to load dataset: {e}")
@@ -248,18 +285,20 @@ def grpo_function(
     def generate_math_prompt(question, answer):
         """Generate prompt with step-by-step thinking format."""
         try:
-            conversation = [{
-                "role": "system",
-                "content": "You are a helpful assistant. You first think about the reasoning process in your mind and then provide the user with the answer."
-              },
-              {
-                "role": "user",
-                "content": f"{question}\n\nShow your work in <think> </think> tags. Return the final answer in \\boxed{{}} format inside <answer> </answer> tags. Think step by step inside <think> tags."
-              },
-              {
-                "role": "assistant",
-                "content": "Let me solve this step by step.\n<think>"
-              }]
+            conversation = [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. You first think about the reasoning process in your mind and then provide the user with the answer."
+                },
+                {
+                    "role": "user",
+                    "content": f"{question}\n\nThink step-by-step inside <think>...</think> tags, then give your final answer inside \\boxed{{}}."
+                },
+                {
+                    "role": "assistant",
+                    "content": "<think>"
+                }
+            ]
             
             prompt = tokenizer.apply_chat_template(conversation, tokenize=False, continue_final_message=True)
             return {"prompt": prompt, "target": answer}
@@ -378,28 +417,6 @@ def grpo_function(
         
         # Create commit message with current training info
         commit_message = f"GRPO training checkpoint - Step {trainer.state.global_step}"
-        
-        # Try to get latest reward metrics from trainer state if available
-        if hasattr(trainer.state, 'log_history') and trainer.state.log_history:
-            latest_logs = trainer.state.log_history[-1]
-            
-            # Look for format and math reward metrics in the logs
-            format_reward = None
-            math_reward = None
-            
-            for key, value in latest_logs.items():
-                if 'format' in key.lower() and 'reward' in key.lower():
-                    format_reward = value
-                elif 'math' in key.lower() and ('reward' in key.lower() or 'accuracy' in key.lower()):
-                    math_reward = value
-            
-            # Add reward info to commit message if found
-            if format_reward is not None or math_reward is not None:
-                commit_message += " |"
-                if format_reward is not None:
-                    commit_message += f" Format Reward: {format_reward:.3f}"
-                if math_reward is not None:
-                    commit_message += f" Math Reward: {math_reward:.3f}"
         
         logger.info(f"Pushing to hub with message: {commit_message}")
         trainer.push_to_hub(commit_message=commit_message)

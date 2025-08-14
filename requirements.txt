@@ -6,3 +6,4 @@ math-verify
 vllm
 wandb
 hf_transfer
+peft

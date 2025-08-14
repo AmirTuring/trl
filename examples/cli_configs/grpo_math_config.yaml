@@ -13,17 +13,17 @@ field_mapping:
   answer_field: answer_correct
 
 # Model configuration  
-model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
+model_name_or_path: Qwen/Qwen2.5-3B-Instruct
 model_revision: main
 torch_dtype: bfloat16
 #attn_implementation: flash_attention_2
 bf16: true
 
 # Training configuration
-output_dir: runs/qwen-2.5-1.5b
+output_dir: runs/qwen-2.5-3b
 num_train_epochs: 1
 max_steps: 1000
-per_device_train_batch_size: 1
+per_device_train_batch_size: 2
 gradient_accumulation_steps: 8
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
@@ -54,14 +54,22 @@ save_total_limit: 2
 dataset_seed: 42
 
 # PEFT configuration
-use_peft: false
+use_peft: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.1
+lora_task_type: "CAUSAL_LM"
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
 
 # Reporting
 report_to: 
   - wandb
-run_name: grpo-qwen-2.5-1.5b-22-10
+run_name: grpo-qwen-2.5-3b-19-50-lora
 
 # Hugging Face Hub
 push_to_hub: true
 hub_strategy: every_save
-hub_model_id: AmirMohseni/grpo-qwen-2.5-1.5b
+hub_model_id: AmirMohseni/grpo-qwen-2.5-3b
