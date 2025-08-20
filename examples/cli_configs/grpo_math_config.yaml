@@ -6,6 +6,12 @@ datasets:
   - path: AmirMohseni/Big-Math-RL-filtered
     split: train
 
+# Optional validation dataset configuration
+# If provided, will be used for evaluation during training
+# validation_datasets:
+#   - path: AmirMohseni/Big-Math-RL-filtered
+#     split: validation
+
 # Field mapping configuration
 # Maps dataset fields to expected question/answer format
 field_mapping:
@@ -49,6 +55,12 @@ logging_steps: 10
 save_strategy: steps
 save_steps: 100
 save_total_limit: 2
+
+# Evaluation configuration (optional)
+# Only used if validation datasets are provided
+# eval_strategy: steps
+# eval_steps: 50
+# eval_delay: 0
 
 # Script-specific arguments
 dataset_seed: 42

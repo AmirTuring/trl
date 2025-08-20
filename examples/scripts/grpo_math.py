@@ -12,6 +12,11 @@ Reward functions:
 1. Format reward: Ensures proper <think></think><answer></answer> structure
 2. Accuracy reward: Uses math_verify to evaluate mathematical correctness
 
+Features:
+- Optional validation dataset support: specify eval_strategy and dataset test split
+- WandB logging with training and validation metrics
+- Configurable field mapping for different dataset formats
+
 Usage:
     python grpo_math.py --config examples/cli_configs/grpo_math_config.yaml
 """
@@ -268,14 +273,24 @@ def grpo_function(
         else:
             raise ValueError("No datasets specified in configuration. Please provide a YAML config with datasets.")
         
-        # Get training dataset (no validation needed for RL training)
-        # Use the configurable dataset split from script arguments
+        # Get training dataset
         train_dataset = dataset.get(script_args.dataset_train_split)
         if train_dataset is None:
             available_splits = list(dataset.keys())
             raise ValueError(f"No dataset found for split '{script_args.dataset_train_split}'. Available splits: {available_splits}")
         
         logger.info(f"Training dataset size: {len(train_dataset)} (using split: '{script_args.dataset_train_split}')")
+        
+        # Get validation dataset if available and evaluation is enabled
+        eval_dataset = None
+        if training_args.eval_strategy != "no":
+            eval_dataset = dataset.get(script_args.dataset_test_split)
+            if eval_dataset is not None:
+                logger.info(f"Validation dataset size: {len(eval_dataset)} (using split: '{script_args.dataset_test_split}')")
+            else:
+                available_splits = list(dataset.keys())
+                logger.info(f"No validation dataset found for split '{script_args.dataset_test_split}'. Available splits: {available_splits}")
+                logger.info("Training will proceed without validation.")
         
     except Exception as e:
         logger.error(f"Failed to load dataset: {e}")
@@ -313,7 +328,7 @@ def grpo_function(
     
     logger.info(f"Using field mapping - Question: '{question_field}', Answer: '{answer_field}'")
     
-    # Convert dataset to R1 prompt format
+    # Convert dataset to prompt format
     def extract_and_format(row):
         """Extract question and answer using configured field mapping."""
         question = row[question_field]
@@ -323,8 +338,13 @@ def grpo_function(
         
         return prompt_data  # Return only {"prompt": prompt, "target": answer}
     
-    logger.info("Converting dataset to R1 prompt format...")
+    logger.info("Converting dataset to prompt format...")
     train_dataset = train_dataset.map(extract_and_format, desc="Processing train dataset")
+    
+    # Process validation dataset if available
+    if eval_dataset is not None:
+        logger.info("Converting validation dataset to prompt format...")
+        eval_dataset = eval_dataset.map(extract_and_format, desc="Processing validation dataset")
     
     # Verify the dataset structure
     logger.info("Verifying dataset structure...")
@@ -355,6 +375,7 @@ def grpo_function(
       reward_funcs=reward_functions,
       args=training_args,
       train_dataset=train_dataset,
+      eval_dataset=eval_dataset if training_args.eval_strategy != "no" else None,
       peft_config=get_peft_config(model_args),
     )
 
@@ -380,6 +401,8 @@ def grpo_function(
     # Log and save metrics
     metrics = train_result.metrics
     metrics["train_samples"] = len(train_dataset)
+    if eval_dataset is not None:
+        metrics["eval_samples"] = len(eval_dataset)
     trainer.log_metrics("train", metrics)
     trainer.save_metrics("train", metrics)
     trainer.save_state()
@@ -389,10 +412,13 @@ def grpo_function(
     # Log final training metrics to WandB (only on main process)
     # The trainer's built-in logging handles metric aggregation across GPUs
     if wandb.run is not None and trainer.accelerator.is_main_process:
-        wandb.log({
+        wandb_final_metrics = {
             "final_train_samples": len(train_dataset),
             "training_completed": True
-        })
+        }
+        if eval_dataset is not None:
+            wandb_final_metrics["final_eval_samples"] = len(eval_dataset)
+        wandb.log(wandb_final_metrics)
 
     ##################################
     # Save model and create model card
@@ -435,9 +461,10 @@ def main():
     
     Loads configuration from YAML file and runs GRPO training with:
     - Dataset loading and field mapping
-    - R1-style prompt formatting  
+    - Optional validation dataset support
     - Format and accuracy reward functions
     - Step-based training with VLLM inference
+    - WandB logging with training and validation metrics
     """
     parser = TrlParser((ModelConfig, ScriptArguments, GRPOConfig, DatasetMixtureConfig))
     model_args, script_args, training_args, dataset_args = parser.parse_args_and_config()
