@@ -22,6 +22,7 @@ import random
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import List, Dict, Any
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -66,6 +67,7 @@ class ScriptArguments(TrlScriptArguments):
     dataset_seed: int = 42
     field_mapping: FieldMappingConfig = field(default_factory=FieldMappingConfig)
     validation_field_mapping: FieldMappingConfig = field(default_factory=lambda: None)
+    validation_datasets: List[Dict[str, Any]] = field(default_factory=list, metadata={"help": "List of validation dataset configurations"})
 
 ########################
 # Helper functions
@@ -263,7 +265,7 @@ def grpo_function(
     
     logger.info("Loading dataset using YAML configuration...")
     try:
-        # Load dataset using TRL's DatasetMixtureConfig
+        # Load training dataset using TRL's DatasetMixtureConfig
         if dataset_args.datasets:
             dataset = get_dataset(dataset_args)
         else:
@@ -280,13 +282,40 @@ def grpo_function(
         # Get validation dataset if available and evaluation is enabled
         eval_dataset = None
         if training_args.eval_strategy != "no":
-            eval_dataset = dataset.get(script_args.dataset_test_split)
-            if eval_dataset is not None:
-                logger.info(f"Validation dataset size: {len(eval_dataset)} (using split: '{script_args.dataset_test_split}')")
+            # Check if separate validation datasets are specified
+            if script_args.validation_datasets:
+                logger.info("Loading separate validation datasets...")
+                # Create a DatasetMixtureConfig for validation datasets
+                from trl.scripts.utils import DatasetConfig
+                validation_dataset_configs = []
+                for val_dataset in script_args.validation_datasets:
+                    validation_dataset_configs.append(DatasetConfig(**val_dataset))
+                
+                validation_mixture_config = DatasetMixtureConfig(
+                    datasets=validation_dataset_configs,
+                    streaming=dataset_args.streaming,
+                    test_split_size=None
+                )
+                validation_dataset_dict = get_dataset(validation_mixture_config)
+                eval_dataset = validation_dataset_dict.get(script_args.dataset_test_split)
+                if eval_dataset is not None:
+                    logger.info(f"Validation dataset size: {len(eval_dataset)} (using separate validation datasets)")
+                else:
+                    available_splits = list(validation_dataset_dict.keys())
+                    logger.info(f"No validation dataset found for split '{script_args.dataset_test_split}' in validation datasets. Available splits: {available_splits}")
+                    # Try to use the first available split
+                    if available_splits:
+                        eval_dataset = validation_dataset_dict[available_splits[0]]
+                        logger.info(f"Using first available split '{available_splits[0]}' for validation. Size: {len(eval_dataset)}")
             else:
-                available_splits = list(dataset.keys())
-                logger.info(f"No validation dataset found for split '{script_args.dataset_test_split}'. Available splits: {available_splits}")
-                logger.info("Training will proceed without validation.")
+                # Use the same dataset with different split
+                eval_dataset = dataset.get(script_args.dataset_test_split)
+                if eval_dataset is not None:
+                    logger.info(f"Validation dataset size: {len(eval_dataset)} (using split: '{script_args.dataset_test_split}')")
+                else:
+                    available_splits = list(dataset.keys())
+                    logger.info(f"No validation dataset found for split '{script_args.dataset_test_split}'. Available splits: {available_splits}")
+                    logger.info("Training will proceed without validation.")
         
     except Exception as e:
         logger.error(f"Failed to load dataset: {e}")
