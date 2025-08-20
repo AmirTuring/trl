@@ -12,11 +12,6 @@ Reward functions:
 1. Format reward: Ensures proper <think></think><answer></answer> structure
 2. Accuracy reward: Uses math_verify to evaluate mathematical correctness
 
-Features:
-- Optional validation dataset support: specify eval_strategy and dataset test split
-- WandB logging with training and validation metrics
-- Configurable field mapping for different dataset formats
-
 Usage:
     python grpo_math.py --config examples/cli_configs/grpo_math_config.yaml
 """
@@ -70,6 +65,7 @@ class ScriptArguments(TrlScriptArguments):
     tokenizer_name_or_path: str = None
     dataset_seed: int = 42
     field_mapping: FieldMappingConfig = field(default_factory=FieldMappingConfig)
+    validation_field_mapping: FieldMappingConfig = field(default_factory=lambda: None)
 
 ########################
 # Helper functions
@@ -322,29 +318,48 @@ def grpo_function(
             # Fallback to simple format
             return {"prompt": f"Solve: {question}\nThink step by step.\n<think>", "target": answer}
     
-    # Get field mapping configuration
-    question_field = script_args.field_mapping.get("question_field")
-    answer_field = script_args.field_mapping.get("answer_field")
+    # Get field mapping configuration for training
+    train_question_field = script_args.field_mapping.get("question_field")
+    train_answer_field = script_args.field_mapping.get("answer_field")
     
-    logger.info(f"Using field mapping - Question: '{question_field}', Answer: '{answer_field}'")
+    logger.info(f"Using training field mapping - Question: '{train_question_field}', Answer: '{train_answer_field}'")
+    
+    # Get field mapping configuration for validation (fallback to training mapping if not specified)
+    if script_args.validation_field_mapping is not None:
+        eval_question_field = script_args.validation_field_mapping.get("question_field")
+        eval_answer_field = script_args.validation_field_mapping.get("answer_field")
+        logger.info(f"Using validation field mapping - Question: '{eval_question_field}', Answer: '{eval_answer_field}'")
+    else:
+        eval_question_field = train_question_field
+        eval_answer_field = train_answer_field
+        logger.info("Using same field mapping for validation as training")
     
     # Convert dataset to prompt format
-    def extract_and_format(row):
-        """Extract question and answer using configured field mapping."""
-        question = row[question_field]
-        answer = row[answer_field]
+    def extract_and_format_train(row):
+        """Extract question and answer using training field mapping."""
+        question = row[train_question_field]
+        answer = row[train_answer_field]
+        
+        prompt_data = generate_math_prompt(question, answer)
+        
+        return prompt_data  # Return only {"prompt": prompt, "target": answer}
+    
+    def extract_and_format_eval(row):
+        """Extract question and answer using validation field mapping."""
+        question = row[eval_question_field]
+        answer = row[eval_answer_field]
         
         prompt_data = generate_math_prompt(question, answer)
         
         return prompt_data  # Return only {"prompt": prompt, "target": answer}
     
     logger.info("Converting dataset to prompt format...")
-    train_dataset = train_dataset.map(extract_and_format, desc="Processing train dataset")
+    train_dataset = train_dataset.map(extract_and_format_train, desc="Processing train dataset")
     
     # Process validation dataset if available
     if eval_dataset is not None:
         logger.info("Converting validation dataset to prompt format...")
-        eval_dataset = eval_dataset.map(extract_and_format, desc="Processing validation dataset")
+        eval_dataset = eval_dataset.map(extract_and_format_eval, desc="Processing validation dataset")
     
     # Verify the dataset structure
     logger.info("Verifying dataset structure...")
@@ -460,7 +475,7 @@ def main():
     Main entry point for GRPO mathematical reasoning training.
     
     Loads configuration from YAML file and runs GRPO training with:
-    - Dataset loading and field mapping
+    - Dataset loading and field mapping (separate for train/validation)
     - Optional validation dataset support
     - Format and accuracy reward functions
     - Step-based training with VLLM inference
