@@ -51,6 +51,7 @@ loss_type: "dr_grpo"
 max_prompt_length: 512
 max_completion_length: 2048
 num_generations: 8
+reward_weights: [0.2, 1.0] # [format w, accuracy w]
 
 # VLLM configuration for fast generation
 use_vllm: true

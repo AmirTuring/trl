@@ -73,7 +73,6 @@ class ScriptArguments(TrlScriptArguments):
 # Helper functions
 ########################
 
-# TODO: fix reward hacking <think>...</think> (empty think) and then \boxed{}
 def format_reward_func(completions, target, **kwargs):
     """
     Evaluates completions based on correct format: exactly one <think>...</think> followed by exactly one \\boxed{} answer
@@ -424,7 +423,6 @@ def grpo_function(
     
     # Set reward functions for math problems
     reward_functions = [format_reward_func, accuracy_reward]
-    reward_weights = [0.2, 1.0]
 
     #########################
     # Instantiate GRPO trainer
@@ -433,7 +431,6 @@ def grpo_function(
     trainer = GRPOTrainer(
       model=model_args.model_name_or_path,
       reward_funcs=reward_functions,
-      reward_weights=reward_weights,
       args=training_args,
       train_dataset=train_dataset,
       eval_dataset=eval_dataset if training_args.eval_strategy != "no" else None,
