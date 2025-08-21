@@ -73,6 +73,7 @@ class ScriptArguments(TrlScriptArguments):
 # Helper functions
 ########################
 
+# TODO: fix reward hacking <think>...</think> (empty think) and then \boxed{}
 def format_reward_func(completions, target, **kwargs):
     """
     Evaluates completions based on correct format: exactly one <think>...</think> followed by exactly one \\boxed{} answer
@@ -98,32 +99,46 @@ def format_reward_func(completions, target, **kwargs):
                     f.write(f"\n\n==============\n")
                     f.write(completion)
             
-            # Check for exactly one <think> and one </think>
-            think_open_count = completion.count("<think>")
-            think_close_count = completion.count("</think>")
+            # Check for proper format: starts with <think>, has exactly one </think>, and answer comes after
+            think_pattern = r"^<think>.*?</think>"
+            think_match = re.search(think_pattern, completion, re.DOTALL)
             
-            if think_open_count != 1 or think_close_count != 1:
-                rewards.append(0.0)
-                continue
-                
-            # Extract the think section and find where it ends
-            think_match = re.search(r"<think>(.*?)<\/think>", completion, re.DOTALL)
             if not think_match:
                 rewards.append(0.0)
                 continue
                 
+            # Check that the completion doesn't have any additional <think> tags after the first one
+            remaining_text = completion[think_match.end():]
+            if "<think>" in remaining_text:
+                # Reward hacking detected: model outputs additional <think> tags
+                rewards.append(0.0)
+                continue
+                
             # Extract the part after </think>
-            after_think = completion[think_match.end():]
+            after_think = remaining_text
+            
+            # Check if text after </think> is much longer than before it
+            think_content = think_match.group(0)
+            think_length = len(think_content)
+            after_think_length = len(after_think)
+            
+            reward = 0.0
+            
+            if after_think_length > think_length:  # If after is longer than think section
+                # Give negative reward proportional to length
+                reward -= 0.001 * after_think_length
             
             # Count \boxed{} occurrences in the entire completion
             boxed_count = len(re.findall(r"\\boxed\{", completion))
             
             # Check if there's exactly one \boxed{} and it appears after </think>
             if boxed_count == 1 and "\\boxed{" in after_think:
-                rewards.append(1.0)
+                reward += 1.0
             else:
-                rewards.append(0.0)
+                reward += 0.0
                 
+            rewards.append(reward)
+            
         except Exception:
             rewards.append(0.0)
     
@@ -409,6 +424,7 @@ def grpo_function(
     
     # Set reward functions for math problems
     reward_functions = [format_reward_func, accuracy_reward]
+    reward_weights = [0.2, 1.0]
 
     #########################
     # Instantiate GRPO trainer
@@ -417,6 +433,7 @@ def grpo_function(
     trainer = GRPOTrainer(
       model=model_args.model_name_or_path,
       reward_funcs=reward_functions,
+      reward_weights=reward_weights,
       args=training_args,
       train_dataset=train_dataset,
       eval_dataset=eval_dataset if training_args.eval_strategy != "no" else None,

@@ -47,9 +47,10 @@ warmup_ratio: 0.03
 
 # GRPO specific parameters
 beta: 0.001
+loss_type: "dr_grpo"
 max_prompt_length: 512
 max_completion_length: 2048
-num_generations: 16
+num_generations: 8
 
 # VLLM configuration for fast generation
 use_vllm: true
