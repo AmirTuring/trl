@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Any
+import json
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -34,6 +35,8 @@ from transformers import AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer, get_peft_config, ModelConfig, TrlParser, DatasetMixtureConfig, get_dataset, ScriptArguments as TrlScriptArguments
 from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
 import wandb
+import torch
+import numpy as np
 
 # Login to WandB using environment variable
 wandb_token = os.getenv("WANDB_API_KEY")
@@ -70,76 +73,182 @@ class ScriptArguments(TrlScriptArguments):
     validation_datasets: List[Dict[str, Any]] = field(default_factory=list, metadata={"help": "List of validation dataset configurations"})
 
 ########################
+# Global reward storage for tracking per-problem rewards
+########################
+
+# Dictionary to store rewards per dataset item for each reward function
+REWARD_STORAGE = {
+    'format_reward': {},  # dataset_index -> list of rewards
+    'accuracy_reward': {}  # dataset_index -> list of rewards
+}
+
+def get_problem_reward_stats(dataset_index, reward_function_name):
+    """Get reward statistics for a specific problem and reward function."""
+    if dataset_index not in REWARD_STORAGE[reward_function_name]:
+        return None
+    
+    rewards = REWARD_STORAGE[reward_function_name][dataset_index]
+    if not rewards:
+        return None
+    
+    import numpy as np
+    return {
+        'mean': float(np.mean(rewards)),
+        'std': float(np.std(rewards)),
+        'min': float(np.min(rewards)),
+        'max': float(np.max(rewards)),
+        'count': len(rewards),
+        'rewards': rewards
+    }
+
+def save_reward_statistics():
+    """Save current reward statistics to JSON files."""
+    os.makedirs("reward_statistics", exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    for func_name, storage in REWARD_STORAGE.items():
+        stats = {}
+        for dataset_idx, rewards in storage.items():
+            if rewards:  # Only include problems with recorded rewards
+                stats[str(dataset_idx)] = get_problem_reward_stats(dataset_idx, func_name)
+        
+        filename = f"reward_statistics/{func_name}_stats_{timestamp}.json"
+        with open(filename, 'w') as f:
+            json.dump(stats, f, indent=2)
+        
+        logger.info(f"Saved {func_name} statistics for {len(stats)} problems to {filename}")
+
+def print_reward_summary():
+    """Print summary of reward statistics per problem."""
+    logger.info("\n" + "="*60)
+    logger.info("REWARD STATISTICS SUMMARY")
+    logger.info("="*60)
+    
+    for func_name, storage in REWARD_STORAGE.items():
+        if not storage:
+            logger.info(f"\n{func_name.upper()}: No data recorded")
+            continue
+            
+        logger.info(f"\n{func_name.upper()} REWARDS:")
+        logger.info(f"  Problems with recorded rewards: {len(storage)}")
+        
+        # Calculate overall statistics
+        all_rewards = []
+        problem_means = []
+        for dataset_idx, rewards in storage.items():
+            if rewards:
+                all_rewards.extend(rewards)
+                problem_means.append(sum(rewards) / len(rewards))
+        
+        if all_rewards:
+            import numpy as np
+            logger.info(f"  Total reward evaluations: {len(all_rewards)}")
+            logger.info(f"  Overall mean: {np.mean(all_rewards):.3f}")
+            logger.info(f"  Overall std: {np.std(all_rewards):.3f}")
+            logger.info(f"  Problem-level mean: {np.mean(problem_means):.3f}")
+            logger.info(f"  Problem-level std: {np.std(problem_means):.3f}")
+            
+            # Show best and worst performing problems
+            problem_stats = [(idx, get_problem_reward_stats(idx, func_name)) 
+                           for idx in storage.keys()]
+            problem_stats = [(idx, stats) for idx, stats in problem_stats if stats is not None]
+            
+            if problem_stats:
+                # Sort by mean reward
+                problem_stats.sort(key=lambda x: x[1]['mean'], reverse=True)
+                
+                logger.info(f"\n  Top 3 performing problems:")
+                for i, (idx, stats) in enumerate(problem_stats[:3]):
+                    logger.info(f"    Problem {idx}: {stats['mean']:.3f} ± {stats['std']:.3f} ({stats['count']} evals)")
+                
+                logger.info(f"\n  Bottom 3 performing problems:")
+                for i, (idx, stats) in enumerate(problem_stats[-3:]):
+                    logger.info(f"    Problem {idx}: {stats['mean']:.3f} ± {stats['std']:.3f} ({stats['count']} evals)")
+    
+    logger.info("\n" + "="*60)
+
+########################
 # Helper functions
 ########################
 
 def format_reward_func(completions, target, **kwargs):
     """
-    Evaluates completions based on correct format: exactly one <think>...</think> followed by exactly one \\boxed{} answer
+    Evaluates completions based on strict format:
+      <think> ...nonempty reasoning... </think> followed by exactly one \\boxed{...}
     
-    Args:
-        completions (list[str]): Generated outputs
-        target (list[str]): Expected answers (not used in format checking)
-      
-    Returns:
-        list[float]: Reward scores (1.0 for correct format, 0.0 otherwise)
+    Rewarding scheme:
+      -1.0 : invalid / reward hacking attempt
+       0.0 : partially correct but missing constraints
+       1.0 : valid format
     """
     rewards = []
+    
+    # Get dataset indices for tracking rewards per problem
+    dataset_indices = kwargs.get('dataset_indices', [])
 
     for completion in completions:
         try:
-            # Add synthetic <think> as it's already part of the prompt and prefilled
+            # Ensure consistency with prompt (prepend <think>)
             completion = "<think>" + completion
-            
-            if random.random() < 0.01:  # 1% chance to write samples into a file
+
+            # Occasionally log completions for inspection
+            if random.random() < 0.01:
                 os.makedirs("completion_samples", exist_ok=True)
-                log_file = os.path.join("completion_samples", "format_completion_samples.txt")
-                with open(log_file, "a") as f:
-                    f.write(f"\n\n==============\n")
+                with open("completion_samples/format_completion_samples.txt", "a") as f:
+                    f.write("\n\n==============\n")
                     f.write(completion)
-            
-            # Check for proper format: starts with <think>, has exactly one </think>, and answer comes after
-            think_pattern = r"^<think>.*?</think>"
+
+            # Match a single <think>...</think> block at the start
+            think_pattern = r"^<think>(.*?)</think>"
             think_match = re.search(think_pattern, completion, re.DOTALL)
-            
+
             if not think_match:
-                rewards.append(0.0)
+                rewards.append(-1.0)  # No valid reasoning block
                 continue
-                
-            # Check that the completion doesn't have any additional <think> tags after the first one
-            remaining_text = completion[think_match.end():]
-            if "<think>" in remaining_text:
-                # Reward hacking detected: model outputs additional <think> tags
-                rewards.append(0.0)
+
+            think_content = think_match.group(1).strip()
+            after_think = completion[think_match.end():]
+
+            # Reject if <think> is empty or trivially short
+            if len(think_content) < 10:
+                rewards.append(-1.0)
                 continue
-                
-            # Extract the part after </think>
-            after_think = remaining_text
-            
-            # Check if text after </think> is much longer than before it
-            think_content = think_match.group(0)
-            think_length = len(think_content)
-            after_think_length = len(after_think)
-            
-            reward = 0.0
-            
-            if after_think_length > think_length:  # If after is longer than think section
-                # Give negative reward proportional to length
-                reward -= 0.001 * after_think_length
-            
-            # Count \boxed{} occurrences in the entire completion
-            boxed_count = len(re.findall(r"\\boxed\{", completion))
-            
-            # Check if there's exactly one \boxed{} and it appears after </think>
-            if boxed_count == 1 and "\\boxed{" in after_think:
-                reward += 1.0
-            else:
-                reward += 0.0
-                
-            rewards.append(reward)
-            
+
+            # Reject if another <think> tag appears later (reward hacking)
+            if "<think>" in after_think:
+                rewards.append(-1.0)
+                continue
+
+            # Count \boxed occurrences
+            boxed_matches = re.findall(r"\\boxed\{.*?\}", completion)
+
+            if len(boxed_matches) != 1:
+                rewards.append(-1.0)  # Must be exactly one answer
+                continue
+
+            # Ensure the \boxed appears *after* reasoning
+            if "\\boxed{" not in after_think:
+                rewards.append(-1.0)
+                continue
+
+            # Penalize flooding after </think>
+            if len(after_think.strip()) > 4 * len(think_content):
+                rewards.append(0.0)  # suspiciously long tail
+                continue
+
+            # Passed all checks
+            rewards.append(1.0)
+
         except Exception:
             rewards.append(0.0)
+
+    # Store rewards per dataset index
+    if dataset_indices and len(dataset_indices) == len(rewards):
+        for idx, reward in zip(dataset_indices, rewards):
+            if idx not in REWARD_STORAGE['format_reward']:
+                REWARD_STORAGE['format_reward'][idx] = []
+            REWARD_STORAGE['format_reward'][idx].append(reward)
     
     return rewards
 
@@ -160,6 +269,9 @@ def accuracy_reward(completions, target, **kwargs):
     )
     
     rewards = []
+    
+    # Get dataset indices for tracking rewards per problem
+    dataset_indices = kwargs.get('dataset_indices', [])
     
     for completion, ground_truth in zip(completions, target):
         try:
@@ -184,6 +296,13 @@ def accuracy_reward(completions, target, **kwargs):
             
         rewards.append(reward)
     
+    # Store rewards per dataset index
+    if dataset_indices and len(dataset_indices) == len(rewards):
+        for idx, reward in zip(dataset_indices, rewards):
+            if idx not in REWARD_STORAGE['accuracy_reward']:
+                REWARD_STORAGE['accuracy_reward'][idx] = []
+            REWARD_STORAGE['accuracy_reward'][idx].append(reward)
+    
     return rewards
 
 
@@ -204,6 +323,143 @@ def _extract_boxed_answer(completion):
         end_idx += 1
     
     return completion[start_idx:end_idx-1].strip()
+
+
+class IndexedGRPOTrainer(GRPOTrainer):
+    """
+    GRPO Trainer that passes dataset indices to reward functions.
+    
+    This allows reward functions to track rewards per dataset item (problem).
+    """
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Store dataset indices mapping
+        self._dataset_indices = {}
+    
+    def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
+        """Override to pass dataset indices to reward functions."""
+        device = self.accelerator.device
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+
+        # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the num of generations
+        keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
+        reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+
+        # This allows for dynamic reward shaping based on training progress.
+        reward_kwargs["trainer_state"] = self.state
+        
+        # Add dataset indices to reward_kwargs
+        dataset_indices = []
+        for example in inputs:
+            if hasattr(example, 'get') and 'dataset_index' in example:
+                dataset_indices.append(example['dataset_index'])
+            elif hasattr(example, '__getitem__') and 'dataset_index' in example:
+                dataset_indices.append(example['dataset_index'])
+            else:
+                # If no explicit index, try to extract from the example or use a default
+                dataset_indices.append(getattr(example, '_index', len(dataset_indices)))
+        
+        reward_kwargs["dataset_indices"] = dataset_indices
+
+        for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
+            zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
+        ):
+            # Import required functions locally
+            from trl.trainer.utils import profiling_context
+            from trl.extras.dataset_formatting import is_conversational, apply_chat_template
+            
+            with profiling_context(self, reward_func_name):
+                if isinstance(reward_func, torch.nn.Module):  # Module (no PretrainedModel) for compat with compiled models
+                    if is_conversational(inputs[0]):
+                        messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+                        texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+                    else:
+                        texts = [p + c for p, c in zip(prompts, completions)]
+                    reward_inputs = reward_processing_class(
+                        text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                    )
+                    reward_inputs = super()._prepare_inputs(reward_inputs)
+                    with torch.inference_mode():
+                        rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+                else:
+                    output_reward_func = reward_func(
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                    )
+                    # Convert None values to NaN
+                    output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+
+                    rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+        # If all reward functions return None for a given row, issue a detailed warning
+        if torch.isnan(rewards_per_func).all(dim=1).any():
+            nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()}
+            row_reward_kwargs["prompt"] = prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = completions[nan_row_idx]
+            logger.warning(
+                f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+
+        # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
+        # completions may be distributed across processes
+        from trl.trainer.utils import gather
+        rewards_per_func = gather(rewards_per_func)
+        return rewards_per_func
+    
+    def get_train_dataloader(self):
+        """Override to add dataset indices to the data."""
+        dataloader = super().get_train_dataloader()
+        
+        # Add index to each sample
+        if hasattr(dataloader.dataset, '__iter__'):
+            # For iterable datasets, we'll add indices dynamically
+            original_dataset = dataloader.dataset
+            
+            class IndexedDataset:
+                def __init__(self, dataset):
+                    self.dataset = dataset
+                    self._current_index = 0
+                
+                def __iter__(self):
+                    self._current_index = 0
+                    for item in self.dataset:
+                        item['dataset_index'] = self._current_index
+                        self._current_index += 1
+                        yield item
+                
+                def __len__(self):
+                    return len(self.dataset)
+            
+            dataloader.dataset = IndexedDataset(original_dataset)
+        else:
+            # For map-style datasets
+            def add_index(example, idx):
+                example['dataset_index'] = idx
+                return example
+            
+            dataloader.dataset = dataloader.dataset.map(add_index, with_indices=True)
+        
+        return dataloader
+    
+    def log_step(self, logs):
+        """Override to add periodic reward statistics logging."""
+        super().log_step(logs)
+        
+        # Log reward statistics every 50 steps
+        if self.state.global_step % 50 == 0:
+            logger.info(f"\n--- Reward Statistics at Step {self.state.global_step} ---")
+            
+            for func_name, storage in REWARD_STORAGE.items():
+                if storage:
+                    recent_problems = list(storage.keys())[-5:]  # Last 5 problems
+                    logger.info(f"\n{func_name} rewards (last 5 problems):")
+                    
+                    for idx in recent_problems:
+                        stats = get_problem_reward_stats(idx, func_name)
+                        if stats and stats['count'] > 0:
+                            logger.info(f"  Problem {idx}: {stats['mean']:.3f} ± {stats['std']:.3f} ({stats['count']} evals)")
 
 
 def get_checkpoint(training_args: GRPOConfig):
@@ -425,10 +681,10 @@ def grpo_function(
     reward_functions = [format_reward_func, accuracy_reward]
 
     #########################
-    # Instantiate GRPO trainer
+    # Instantiate Indexed GRPO trainer
     #########################
 
-    trainer = GRPOTrainer(
+    trainer = IndexedGRPOTrainer(
       model=model_args.model_name_or_path,
       reward_funcs=reward_functions,
       args=training_args,
@@ -494,6 +750,13 @@ def grpo_function(
     # Save everything else on main process
     if trainer.accelerator.is_main_process:
         trainer.create_model_card({"tags": ["rl","grpo"]})
+        
+        # Save and log reward statistics per problem
+        logger.info("*** Saving reward statistics per problem ***")
+        save_reward_statistics()
+        
+        # Print summary statistics
+        print_reward_summary()
     
     # push to hub if needed
     if training_args.push_to_hub is True:
