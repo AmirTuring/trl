@@ -16,6 +16,11 @@ New in this version:
 - Per-completion event logging (JSONL) updated **every step**
 - Per-step summaries with mean/std per prompt and pass@k
 - Separate folder per run: <output_dir>/reward_logs/<run_name>_<timestamp>/
+- Pass@k metrics logged to WandB for both training and validation sets
+- Pass@k calculated for k = 1, powers of 2 up to num_generations, and num_generations
+- Real-time pass@k monitoring in console during training
+- Final pass@k statistics summary at end of training
+- Proper WandB metric naming: train/pass_at_k/{k} and eval/pass_at_k/{k}
 
 Usage:
     python grpo_math.py --config examples/cli_configs/grpo_math_config.yaml
@@ -25,10 +30,10 @@ import logging
 import os
 import random
 import re
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Any
-import json
 import hashlib
 
 from dotenv import load_dotenv
@@ -220,6 +225,7 @@ class IndexedGRPOTrainer(GRPOTrainer):
     def __init__(self, *args, tokenizer=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._tokenizer = tokenizer
+        self._is_evaluation_mode = False  # Track evaluation mode
 
         try:
             if getattr(self.args, "gradient_checkpointing", False):
@@ -243,16 +249,34 @@ class IndexedGRPOTrainer(GRPOTrainer):
             is_main = self.accelerator.is_main_process
             base_dir = os.path.join(self.args.output_dir, "reward_logs")
             run_name = getattr(self.args, "run_name", "grpo-run")
+            
+            # Calculate k values: 1, powers of 2 up to num_generations, and num_generations
+            num_generations = getattr(self.args, "num_generations", 1)
+            k_values = [1]
+            current_k = 2
+            while current_k <= num_generations:
+                k_values.append(current_k)
+                current_k *= 2
+            if num_generations not in k_values:
+                k_values.append(num_generations)
+            k_values = sorted(list(set(k_values)))  # Remove duplicates and sort
+            
             self.reward_logger = RewardLogger(
                 base_dir=base_dir,
                 run_name=run_name,
                 is_main=is_main,
-                num_generations=getattr(self.args, "num_generations", 1),
-                k_defaults=(1, 5),
+                num_generations=num_generations,
+                k_defaults=tuple(k_values),
             )
             self.legacy_tracker = LegacyRewardTracker(is_main=is_main)
         except Exception as e:
             self.accelerator.print(f"Logger instantiation failed: {e}")
+
+    def _prepare_inputs(self, inputs):
+        """Override to track evaluation mode."""
+        # Set evaluation mode flag based on model training state
+        self._is_evaluation_mode = not self.model.training
+        return super()._prepare_inputs(inputs)
 
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         """Override to calculate rewards and stream events per completion."""
@@ -283,12 +307,130 @@ class IndexedGRPOTrainer(GRPOTrainer):
                 if self.reward_logger:
                     self._record_reward_events(prompts, completions, reward_kwargs, rewards_per_func, self.reward_func_names)
                     self.reward_logger.flush_step(int(self.state.global_step))
+                    
+                    # Calculate and log pass@k metrics to WandB
+                    self._log_pass_at_k_to_wandb(reward_kwargs, rewards_per_func, self.reward_func_names)
+                    
                 if self.legacy_tracker:
                     self._update_legacy_tracker(reward_kwargs, rewards_per_func, self.reward_func_names)
             except Exception as e:
                 self.accelerator.print(f"Reward event logging/tracking failed: {e}")
 
         return rewards_per_func
+
+    def _log_pass_at_k_to_wandb(self, reward_kwargs, rewards_per_func, reward_func_names):
+        """Calculate pass@k metrics from current batch and log to WandB."""
+        try:
+            # Find accuracy reward index
+            acc_idx = reward_func_names.index("accuracy_reward")
+            if acc_idx is None:
+                return
+                
+            # Get accuracy rewards and determine correct answers
+            accuracy_rewards = rewards_per_func[:, acc_idx].cpu().tolist()
+            correct_answers = [1.0 if acc >= 0.999 else 0.0 for acc in accuracy_rewards]
+            
+            # Get problem IDs and group by problem
+            problem_ids = reward_kwargs.get("problem_id", [])
+            num_generations = reward_kwargs.get("num_generations")
+            
+            if not problem_ids:
+                return
+                
+            # Group by problem ID
+            problem_groups = {}
+            for i, (pid, correct) in enumerate(zip(problem_ids, correct_answers)):
+                if i % num_generations == 0:  # New problem
+                    problem_groups[pid] = []
+                problem_groups[pid].append(correct)
+            
+            # Calculate k values: 1, powers of 2 up to num_generations, and num_generations
+            k_values = [1]
+            current_k = 2
+            while current_k <= num_generations:
+                k_values.append(current_k)
+                current_k *= 2
+            if num_generations not in k_values:
+                k_values.append(num_generations)
+            k_values = sorted(list(set(k_values)))  # Remove duplicates and sort
+            
+            pass_at_k_metrics = {}
+            
+            for k in k_values:
+                pass_counts = []
+                for problem_corrects in problem_groups.values():
+                    if len(problem_corrects) >= k:
+                        # Calculate pass@k: at least one correct in k attempts
+                        passed = 1.0 if sum(problem_corrects[:k]) > 0 else 0.0
+                        pass_counts.append(passed)
+                
+                if pass_counts:
+                    avg_pass_at_k = sum(pass_counts) / len(pass_counts)
+                    pass_at_k_metrics[f"pass@{k}"] = avg_pass_at_k
+            
+            # Use evaluation mode flag for proper metric naming
+            prefix = "eval/" if self._is_evaluation_mode else "train/"
+            
+            # Log to WandB with proper metric structure
+            if wandb.run and pass_at_k_metrics:
+                wandb_metrics = {}
+                for k, v in pass_at_k_metrics.items():
+                    wandb_metrics[f"{prefix}pass_at_k/{k}"] = v
+                wandb_metrics[f"{prefix}num_problems"] = len(problem_groups)
+                wandb_metrics[f"{prefix}total_generations"] = len(correct_answers)
+                wandb.log(wandb_metrics, step=int(self.state.global_step))
+                
+        except Exception as e:
+            self.accelerator.print(f"Pass@k calculation failed: {e}")
+
+    def _calculate_pass_at_k_from_step_summary(self, step):
+        """Calculate pass@k from reward logger's step summary."""
+        if not self.accelerator.is_main_process or not self.reward_logger:
+            return {}
+            
+        try:
+            step_file = self.reward_logger.step_dir / f"step_{step:06d}.json"
+            if not step_file.exists():
+                return {}
+                
+            with open(step_file, 'r') as f:
+                step_data = json.load(f)
+            
+            summaries = step_data.get("summaries", {})
+            if not summaries:
+                return {}
+            
+            # Get num_generations to determine k values
+            num_generations = getattr(self.args, "num_generations", 1)
+            
+            # Calculate k values: 1, powers of 2 up to num_generations, and num_generations
+            k_values = [1]
+            current_k = 2
+            while current_k <= num_generations:
+                k_values.append(current_k)
+                current_k *= 2
+            if num_generations not in k_values:
+                k_values.append(num_generations)
+            k_values = sorted(list(set(k_values)))  # Remove duplicates and sort
+            
+            # Aggregate pass@k across all problems
+            pass_at_k_metrics = {}
+            
+            for k in k_values:
+                pass_counts = []
+                for problem_summary in summaries.values():
+                    if f"pass@{k}" in problem_summary:
+                        pass_counts.append(problem_summary[f"pass@{k}"])
+                
+                if pass_counts:
+                    avg_pass_at_k = sum(pass_counts) / len(pass_counts)
+                    pass_at_k_metrics[f"pass@{k}"] = avg_pass_at_k
+            
+            return pass_at_k_metrics
+            
+        except Exception as e:
+            self.accelerator.print(f"Pass@k calculation from step summary failed: {e}")
+            return {}
 
     def _update_legacy_tracker(self, reward_kwargs, rewards_per_func, reward_func_names):
         """Update the legacy reward tracker with a batch of rewards."""
@@ -352,6 +494,14 @@ class IndexedGRPOTrainer(GRPOTrainer):
                     prev_step = int(self.state.global_step) - 1
                     if prev_step >= 0:
                         self.reward_logger.flush_step(prev_step)
+                        
+                        # Log pass@k metrics from step summary to WandB
+                        pass_at_k_metrics = self._log_step_pass_at_k_to_wandb(prev_step)
+                        
+                        # Also log to console for monitoring
+                        if pass_at_k_metrics:
+                            mode = "EVAL" if self._is_evaluation_mode else "TRAIN"
+                            logger.info(f"Step {prev_step} ({mode}) pass@k: {pass_at_k_metrics}")
             except Exception as e:
                 self.accelerator.print(f"RewardLogger flush_step failed: {e}")
 
@@ -359,6 +509,96 @@ class IndexedGRPOTrainer(GRPOTrainer):
             if self.legacy_tracker:
                 self.legacy_tracker.log_recent_stats_for_step(self.state.global_step)
                 self.legacy_tracker.save_statistics(step=self.state.global_step)
+
+    def _log_step_pass_at_k_to_wandb(self, step):
+        """Log pass@k metrics from step summary to WandB."""
+        try:
+            pass_at_k_metrics = self._calculate_pass_at_k_from_step_summary(step)
+            if not pass_at_k_metrics:
+                return {}
+                
+            # Use evaluation mode flag for proper metric naming
+            prefix = "eval/" if self._is_evaluation_mode else "train/"
+            
+            # Log to WandB with proper metric structure
+            if wandb.run:
+                wandb_metrics = {}
+                for k, v in pass_at_k_metrics.items():
+                    wandb_metrics[f"{prefix}pass_at_k/{k}"] = v
+                wandb_metrics[f"{prefix}step"] = step
+                wandb.log(wandb_metrics, step=int(self.state.global_step))
+            
+            return pass_at_k_metrics
+                
+        except Exception as e:
+            self.accelerator.print(f"Step pass@k logging failed: {e}")
+            return {}
+
+    def log_final_pass_at_k_statistics(self):
+        """Log final pass@k statistics from all available step summaries."""
+        if not self.accelerator.is_main_process or not self.reward_logger:
+            return
+            
+        try:
+            # Get all step summary files
+            step_files = list(self.reward_logger.step_dir.glob("step_*.json"))
+            if not step_files:
+                return
+                
+            # Get num_generations to determine k values
+            num_generations = getattr(self.args, "num_generations", 1)
+            
+            # Calculate k values: 1, powers of 2 up to num_generations, and num_generations
+            k_values = [1]
+            current_k = 2
+            while current_k <= num_generations:
+                k_values.append(current_k)
+                current_k *= 2
+            if num_generations not in k_values:
+                k_values.append(num_generations)
+            k_values = sorted(list(set(k_values)))  # Remove duplicates and sort
+                
+            # Calculate average pass@k across all steps
+            all_pass_at_k = {k: [] for k in k_values}
+            
+            for step_file in step_files:
+                try:
+                    with open(step_file, 'r') as f:
+                        step_data = json.load(f)
+                    
+                    summaries = step_data.get("summaries", {})
+                    if not summaries:
+                        continue
+                    
+                    # Aggregate pass@k for this step
+                    for k in k_values:
+                        pass_counts = []
+                        for problem_summary in summaries.values():
+                            if f"pass@{k}" in problem_summary:
+                                pass_counts.append(problem_summary[f"pass@{k}"])
+                        
+                        if pass_counts:
+                            avg_pass_at_k = sum(pass_counts) / len(pass_counts)
+                            all_pass_at_k[k].append(avg_pass_at_k)
+                            
+                except Exception as e:
+                    self.accelerator.print(f"Error reading step file {step_file}: {e}")
+                    continue
+            
+            # Calculate final averages
+            final_metrics = {}
+            for k in k_values:
+                if all_pass_at_k[k]:
+                    final_metrics[f"final_pass@{k}"] = sum(all_pass_at_k[k]) / len(all_pass_at_k[k])
+                    final_metrics[f"final_pass@{k}_std"] = (sum((x - final_metrics[f"final_pass@{k}"])**2 for x in all_pass_at_k[k]) / len(all_pass_at_k[k]))**0.5
+            
+            # Log to WandB
+            if wandb.run and final_metrics:
+                wandb.log(final_metrics, step=int(self.state.global_step))
+                logger.info(f"Final pass@k statistics: {final_metrics}")
+                
+        except Exception as e:
+            self.accelerator.print(f"Final pass@k statistics calculation failed: {e}")
 
 
 ########################
@@ -625,6 +865,7 @@ def grpo_function(
     if trainer.accelerator.is_main_process:
         if getattr(trainer, "reward_logger", None):
             trainer.reward_logger.flush_step(int(trainer.state.global_step))
+            trainer.log_final_pass_at_k_statistics()  # Log final pass@k statistics
             trainer.reward_logger.finalize()
             logger.info(f"Modern reward logs written to: {trainer.reward_logger.run_dir}")
         if wandb.run:
