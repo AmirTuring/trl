@@ -946,7 +946,6 @@ def grpo_function(
     if trainer.accelerator.is_main_process:
         if getattr(trainer, "reward_logger", None):
             trainer.reward_logger.flush_step(int(trainer.state.global_step))
-            trainer.log_final_pass_at_k_statistics()  # Console-only final pass@k statistics
             trainer.reward_logger.finalize()
             logger.info(f"Modern reward logs written to: {trainer.reward_logger.run_dir}")
         if wandb.run:
