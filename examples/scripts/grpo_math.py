@@ -378,7 +378,8 @@ class IndexedGRPOTrainer(GRPOTrainer):
                     wandb_metrics[f"{prefix}pass_at_k/{k}"] = v
                 wandb_metrics[f"{prefix}num_problems"] = len(problem_groups)
                 wandb_metrics[f"{prefix}total_generations"] = len(correct_answers)
-                wandb.log(wandb_metrics, step=int(self.state.global_step))
+                # Don't specify step - let wandb use current step to avoid monotonicity issues
+                wandb.log(wandb_metrics)
                 
         except Exception as e:
             self.accelerator.print(f"Pass@k calculation failed: {e}")
@@ -525,8 +526,8 @@ class IndexedGRPOTrainer(GRPOTrainer):
                 wandb_metrics = {}
                 for k, v in pass_at_k_metrics.items():
                     wandb_metrics[f"{prefix}pass_at_k/{k}"] = v
-                wandb_metrics[f"{prefix}step"] = step
-                wandb.log(wandb_metrics, step=int(self.state.global_step))
+                # Don't specify step - let wandb use current step to avoid monotonicity issues
+                wandb.log(wandb_metrics)
             
             return pass_at_k_metrics
                 
