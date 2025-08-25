@@ -34,14 +34,14 @@ bf16: true
 # Training configuration
 output_dir: runs/qwen-2.5-math-1.5b
 #num_train_epochs: 20
-max_steps: 1000
+max_steps: 100
 per_device_train_batch_size: 2
-per_device_eval_batch_size: 2
-gradient_accumulation_steps: 16
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 8
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-learning_rate: 1.0e-6
+learning_rate: 5.0e-5
 #lr_scheduler_type: cosine
 #warmup_ratio: 0.03
 
@@ -50,8 +50,8 @@ beta: 0.001
 loss_type: "dr_grpo"
 max_prompt_length: 1024
 max_completion_length: 3072
-temperature: 0.6
-num_generations: 8
+#temperature: 0.6
+num_generations: 16
 reward_weights: [0.0, 1.0]
 
 # VLLM configuration for fast generation
@@ -70,8 +70,8 @@ save_total_limit: 2
 # Evaluation configuration (optional)
 # Only used if validation datasets are provided
 eval_strategy: steps
-eval_steps: 25
-eval_delay: 5
+eval_steps: 10
+eval_delay: 0
 
 # Script-specific arguments
 dataset_seed: 42
@@ -90,9 +90,9 @@ dataset_seed: 42
 # Reporting
 report_to: 
   - wandb
-run_name: grpo-qwen-2.5-math-1.5b-16-07
+run_name: grpo-qwen-2.5-math-1.5b-16-58
 
 # Hugging Face Hub
 push_to_hub: true
 hub_strategy: every_save
-hub_model_id: AmirMohseni/qwen-qwen-2.5-math-1.5b-pi13
+hub_model_id: AmirMohseni/qwen-qwen-2.5-math-1.5b-pi13-v2

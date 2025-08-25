@@ -20,12 +20,13 @@ New in this version:
 - Per-step summaries with mean/std per prompt and pass@k (unchanged)
 - Separate folder per run: <output_dir>/reward_logs/<run_name>_<timestamp>/ (unchanged)
 - Proper WandB metric naming: `train/pass_at_k/{k}` and `eval/pass_at_k/{k}`
-- Multi-GPU correctness via **SUM reduction** (no biased averaging)
-- W&B init/login only on main process; non-main ranks **disabled early**
+- **Only rank 0 reads/prints/logs** - no cross-rank reductions needed
 - **No** `num_problems` or other count metrics logged
+- **Pass@k computed from JSON files** in `.../step_summaries/step_*.json`
+- **Step boundary detection** - flushes step summaries when global step advances
 
 Usage:
-    python grpo_math_passk_wandb_fixed.py --config examples/cli_configs/grpo_math_config.yaml
+    python grpo_math.py --config examples/cli_configs/grpo_math_config.yaml
 """
 
 import logging
@@ -133,8 +134,6 @@ def format_reward_func(completions, **kwargs):
        0.0 : partially correct but missing constraints
        1.0 : valid format
     """
-    logger.info(f"format_reward_func called with {len(completions)} completions")
-
     rewards = []
     for completion in completions:
         try:
@@ -180,8 +179,6 @@ def accuracy_reward(completions, target, num_generations: int = 1, **kwargs):
     """
     Reward function that evaluates mathematical correctness using math_verify.
     """
-    logger.info(f"accuracy_reward called with {len(completions)} completions")
-
     verify_func = math_metric(
         gold_extraction_target=(LatexExtractionConfig(),),
         pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
@@ -218,6 +215,7 @@ class IndexedGRPOTrainer(GRPOTrainer):
         super().__init__(*args, **kwargs)
         self._tokenizer = tokenizer
         self._is_evaluation_mode = False  # Track evaluation mode
+        self._last_global_step = -1  # Track step boundaries
 
         try:
             if getattr(self.args, "gradient_checkpointing", False):
@@ -256,22 +254,26 @@ class IndexedGRPOTrainer(GRPOTrainer):
         except Exception as e:
             self.accelerator.print(f"Logger instantiation failed: {e}")
 
-        # --- Pass@k accumulators (HF-style behavior) ---
-        self._train_pk_num_local: Dict[int, int] = {}
-        self._train_pk_den_local: Dict[int, int] = {}
-        self._eval_pk_num_local: Dict[int, int] = {}
-        self._eval_pk_den_local: Dict[int, int] = {}
-        self._eval_accumulating: bool = False
-        self._eval_start_step: int | None = None
+        # Track evaluation mode
+        self._is_evaluation_mode = False
 
-    def _prepare_inputs(self, inputs):
-        """Override to track evaluation mode."""
-        # Set evaluation mode flag based on model training state
-        self._is_evaluation_mode = not self.model.training
-        return super()._prepare_inputs(inputs)
+        # Accumulate data for pass@k calculation across logging steps (HF-style)
+        self._step_correct_answers = []
+        self._step_problem_ids = []
+        self._last_logged_step = -1
+
+        # Accumulate pass@k metrics across logging window
+        self._logging_window_passk_data = []  # List of pass@k dicts from each step
+        self._logging_window_start_step = 0
 
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
-        """Override to calculate rewards and stream events per completion."""
+        """Override to calculate rewards and compute pass@k metrics."""
+        # Track evaluation mode
+        self._is_evaluation_mode = not self.model.training
+        if self.accelerator.is_main_process:
+            logger.debug(f"_CALCULATE_REWARDS: Called at step {self.state.global_step}, model.training={self.model.training}, "
+                        f"eval_mode={self._is_evaluation_mode}, current data size: {len(self._step_correct_answers)}")
+
         device = self.accelerator.device
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
@@ -288,44 +290,334 @@ class IndexedGRPOTrainer(GRPOTrainer):
             nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
             logger.warning(f"All reward functions returned None for a sample. Prompt: {prompts[nan_row_idx][:100]}...")
 
-        # --- Per-batch event logging (main process only) ---
+        # Gather across processes (if needed)
+        if hasattr(self.accelerator, "gather"):
+            rewards_per_func = self.accelerator.gather(rewards_per_func)
+            # Also gather problem_ids to ensure consistency across processes
+            problem_ids = reward_kwargs.get("problem_id", [])
+            if problem_ids:
+                # Gather problem IDs - convert to tensor first for proper gathering
+                problem_ids_tensor = torch.tensor(problem_ids, device=self.accelerator.device)
+                gathered_problem_ids_tensor = self.accelerator.gather(problem_ids_tensor)
+                gathered_problem_ids = gathered_problem_ids_tensor.cpu().tolist()
+                reward_kwargs["problem_id"] = gathered_problem_ids
+
+        # Accumulate data for pass@k calculation (main process only)
         if self.accelerator.is_main_process:
             try:
-                if self.reward_logger:
-                    self._record_reward_events(prompts, completions, reward_kwargs, rewards_per_func, self.reward_func_names)
-                    self.reward_logger.flush_step(int(self.state.global_step))
-                if self.legacy_tracker:
-                    self._update_legacy_tracker(reward_kwargs, rewards_per_func, self.reward_func_names)
+                self._accumulate_step_data(reward_kwargs, rewards_per_func, self.reward_func_names)
             except Exception as e:
-                self.accelerator.print(f"Reward event logging/tracking failed: {e}")
-
-        # --- Pass@k accumulation/logging (must run on ALL ranks for proper reduction) ---
-        try:
-            self._accumulate_and_maybe_log_passk(reward_kwargs, rewards_per_func, self.reward_func_names)
-        except Exception as e:
-            self.accelerator.print(f"Pass@k accumulation/logging failed: {e}")
+                self.accelerator.print(f"Data accumulation failed: {e}")
 
         return rewards_per_func
 
-    def _k_grid(self, num_generations: int):
-        k_values = [1]
-        current_k = 2
-        while current_k <= num_generations:
-            k_values.append(current_k)
-            current_k *= 2
-        if num_generations not in k_values:
-            k_values.append(num_generations)
-        return sorted(list(set(k_values)))
+    def _accumulate_step_data(self, reward_kwargs, rewards_per_func, reward_func_names):
+        """Accumulate data from all batches within a step for pass@k calculation."""
+        try:
+            logger.debug(f"_ACCUMULATE_DATA: Called with eval_mode={self._is_evaluation_mode}, "
+                        f"batch_size={len(reward_kwargs.get('problem_id', []))}")
+
+            # Find accuracy reward index
+            acc_idx = reward_func_names.index("accuracy_reward")
+
+            # Get accuracy rewards and determine correct answers
+            accuracy_rewards = rewards_per_func[:, acc_idx].cpu().tolist()
+            correct_answers = [1.0 if acc >= 0.999 else 0.0 for acc in accuracy_rewards]
+
+            # Get problem IDs
+            problem_ids = reward_kwargs.get("problem_id", [])
+
+            logger.debug(f"_ACCUMULATE_DATA: Processing {len(correct_answers)} answers, {len(problem_ids)} problem IDs, "
+                        f"accuracy rewards mean: {sum(accuracy_rewards)/len(accuracy_rewards):.4f}")
+
+            # Accumulate data
+            self._step_correct_answers.extend(correct_answers)
+            self._step_problem_ids.extend(problem_ids)
+
+            logger.debug(f"_ACCUMULATE_DATA: Total accumulated - {len(self._step_correct_answers)} answers, "
+                        f"{len(self._step_problem_ids)} problem IDs")
+
+        except Exception as e:
+            self.accelerator.print(f"Data accumulation failed: {e}")
+
+    def _calculate_pass_at_k_once_per_step(self):
+        """Calculate pass@k metrics once per step using correct combinatorial formula."""
+        try:
+            logger.info(f"CALCULATE_PASSK: Called with eval_mode={self._is_evaluation_mode}, "
+                       f"step_answers={len(self._step_correct_answers)}, step_ids={len(self._step_problem_ids)}")
+
+            if not self._step_correct_answers or not self._step_problem_ids:
+                logger.info(f"CALCULATE_PASSK: No step data available - answers: {len(self._step_correct_answers)}, "
+                           f"ids: {len(self._step_problem_ids)}")
+                return {}
+
+            num_generations = getattr(self.args, "num_generations", 1)
+
+            # Group completions per problem
+            problem_groups = []
+            if self._step_problem_ids:
+                from collections import defaultdict
+                grouped = defaultdict(list)
+                for pid, correct in zip(self._step_problem_ids, self._step_correct_answers):
+                    grouped[int(pid)].append(int(correct))
+                problem_groups = list(grouped.values())
+                logger.info(f"CALCULATE_PASSK: Grouped by problem IDs, got {len(problem_groups)} problem groups")
+            else:
+                # Fallback: chunk by num_generations
+                cg = int(num_generations)
+                for i in range(0, len(self._step_correct_answers), cg):
+                    problem_groups.append(self._step_correct_answers[i:i+cg])
+                logger.info(f"CALCULATE_PASSK: Used fallback chunking, got {len(problem_groups)} problem groups")
+
+            if not problem_groups:
+                logger.info(f"CALCULATE_PASSK: No problem groups created")
+                return {}
+
+            # Debug: check problem group sizes
+            for idx, corrects in enumerate(problem_groups):
+                logger.debug(f"Problem idx {idx}: {len(corrects)} completions, {sum(corrects)} correct")
+
+            # Calculate k values
+            k_values = self._k_grid(num_generations)
+            logger.info(f"Using k_values: {k_values} for num_generations={num_generations}")
+
+            # Validate that we have enough data for meaningful pass@k calculation
+            expected_completions_per_problem = num_generations
+            valid_problems = [pg for pg in problem_groups if len(pg) == expected_completions_per_problem]
+
+            if len(valid_problems) != len(problem_groups):
+                logger.warning(f"CALCULATE_PASSK: Found {len(problem_groups)} total problems, "
+                              f"but only {len(valid_problems)} have exactly {expected_completions_per_problem} completions. "
+                              f"Using only valid problems for pass@k calculation.")
+
+            if not valid_problems:
+                logger.warning(f"CALCULATE_PASSK: No valid problems found for pass@k calculation")
+                return {}
+
+            # Calculate pass@k using correct combinatorial formula
+            pass_at_k_metrics = {}
+            num_problems = len(valid_problems)
+
+            logger.info(f"Calculating pass@k for {num_problems} problems with {num_generations} generations each")
+            logger.info(f"Total accumulated data: {len(self._step_correct_answers)} answers, {len(self._step_problem_ids)} problem IDs")
+
+            if num_problems > 0:
+                for k in k_values:
+                    pass_counts = []
+                    for problem_corrects in valid_problems:
+                        # Each problem should have exactly num_generations completions
+                        num_correct = int(sum(problem_corrects))  # Convert to int for comb()
+                        num_total = len(problem_corrects)
+
+                        logger.debug(f"Problem: {num_correct}/{num_total} correct, k={k}")
+
+                        # Use correct combinatorial formula: pass@k = 1 - C(num_total - num_correct, k) / C(num_total, k)
+                        if k <= num_total:
+                            from math import comb
+                            n_minus_c = num_total - num_correct
+                            numerator = comb(n_minus_c, k)
+                            denominator = comb(num_total, k)
+                            pass_rate = 1.0 - (numerator / denominator) if denominator > 0 else 0.0
+                        else:
+                            pass_rate = 0.0
+
+                        logger.debug(f"  k={k}: num_correct={num_correct}, num_total={num_total}, pass_rate={pass_rate}")
+                        pass_counts.append(pass_rate)
+
+                    if pass_counts:
+                        avg_pass_at_k = sum(pass_counts) / len(pass_counts)
+                        logger.debug(f"  k={k}: avg_pass_at_k={avg_pass_at_k} from {len(pass_counts)} problems")
+                        # Round to 4 decimal places for higher accuracy
+                        pass_at_k_metrics[k] = round(avg_pass_at_k, 4)
+
+            # Clear accumulated data (only during training, not during evaluation)
+            # During evaluation, we want to keep data for final calculation in evaluate() method
+            if not self._is_evaluation_mode:
+                self._step_correct_answers.clear()
+                self._step_problem_ids.clear()
+                logger.info(f"CALCULATE_PASSK: Cleared step data after training calculation")
+            else:
+                logger.info(f"CALCULATE_PASSK: Keeping step data for evaluation final calculation")
+
+            return pass_at_k_metrics
+
+        except Exception as e:
+            self.accelerator.print(f"Pass@k calculation failed: {e}")
+            return {}
+
+    def _calculate_window_average_passk(self):
+        """Calculate average pass@k metrics across the logging window."""
+        try:
+            if not self._logging_window_passk_data:
+                return {}
+
+            # Get all unique k values across all steps
+            all_k_values = set()
+            for step_data in self._logging_window_passk_data:
+                all_k_values.update(step_data.keys())
+
+            if not all_k_values:
+                return {}
+
+            # Calculate average for each k value
+            averaged_metrics = {}
+            for k in sorted(all_k_values):
+                k_values = []
+                for step_data in self._logging_window_passk_data:
+                    if k in step_data:
+                        k_values.append(step_data[k])
+
+                if k_values:
+                    # Average the pass@k rates across steps in the window
+                    avg_value = sum(k_values) / len(k_values)
+                    logger.debug(f"Window avg for {k}: {avg_value} from values {k_values}")
+                    averaged_metrics[k] = avg_value
+
+            return averaged_metrics
+
+        except Exception as e:
+            self.accelerator.print(f"Window average pass@k calculation failed: {e}")
+            return {}
+
+    def _log_pass_at_k_to_wandb(self):
+        """Log accumulated pass@k metrics to WandB at configured logging steps using HF-style accumulation."""
+        try:
+            current_step = int(self.state.global_step)
+
+            # Only log if we haven't logged for this step yet (train path)
+            if current_step <= self._last_logged_step:
+                return
+
+            # Always calculate pass@k for current step and accumulate
+            pass_at_k_metrics = self._calculate_pass_at_k_once_per_step()
+            if pass_at_k_metrics:
+                self._logging_window_passk_data.append(pass_at_k_metrics)
+
+            # Check if we should log based on logging configuration
+            if not self._should_log_now(self._is_evaluation_mode):
+                # Continue accumulating data but don't log yet
+                return
+
+            # Log averaged pass@k metrics across the logging window
+            if self._logging_window_passk_data:
+                # Calculate average pass@k across all steps in the window
+                averaged_passk = self._calculate_window_average_passk()
+
+                if averaged_passk:
+                    # Use evaluation mode flag for proper metric naming
+                    prefix = "eval/" if self._is_evaluation_mode else "train/"
+
+                    # Log to WandB with proper metric structure
+                    if wandb.run:
+                        wandb_metrics = {}
+                        for k, v in averaged_passk.items():
+                            wandb_metrics[f"{prefix}pass@{k}"] = v
+                        wandb.log(wandb_metrics)
+
+                        # Format the metrics with more decimal places for display
+                        formatted_metrics = {str(k): f"{v:.4f}" for k, v in averaged_passk.items()}
+                        logger.info(f"Step {current_step} ({prefix.strip('/')}) avg pass@k over {len(self._logging_window_passk_data)} steps: {formatted_metrics}")
+
+                    # Clear accumulated data for next logging window
+                    self._logging_window_passk_data.clear()
+                    self._logging_window_start_step = current_step
+
+                # Update last logged step
+                self._last_logged_step = current_step
+
+        except Exception as e:
+            self.accelerator.print(f"Pass@k logging failed: {e}")
+
+    def training_step(self, model, inputs, num_items_in_batch=None):
+        """Override training_step to log pass@k metrics at the end of each step."""
+        # Call parent training step
+        result = super().training_step(model, inputs, num_items_in_batch)
+
+        # Log pass@k metrics at logging steps (main process only)
+        if self.accelerator.is_main_process:
+            try:
+                logger.info(f"TRAINING_STEP: About to log pass@k, eval_mode={self._is_evaluation_mode}, "
+                          f"step_data_size={len(self._step_correct_answers)}")
+                self._log_pass_at_k_to_wandb()
+            except Exception as e:
+                self.accelerator.print(f"Pass@k logging failed: {e}")
+
+        return result
+
+    def evaluation_step(self, model, inputs, num_items_in_batch=None):
+        """Override evaluation_step to accumulate pass@k metrics during evaluation."""
+        # Call parent evaluation step
+        result = super().evaluation_step(model, inputs, num_items_in_batch)
+
+        # During eval we only accumulate raw data; we calculate metrics once after the eval loop
+        if self.accelerator.is_main_process:
+            try:
+                logger.info(f"EVALUATION_STEP: Called at global step {self.state.global_step}, "
+                           f"eval_mode={self._is_evaluation_mode}, "
+                           f"step_data_size={len(self._step_correct_answers)}")
+
+                # Just log that we're accumulating data, don't calculate metrics yet
+                logger.info(f"EVAL ACCUMULATION: Accumulated data - {len(self._step_correct_answers)} answers, "
+                           f"{len(self._step_problem_ids)} problem IDs")
+            except Exception as e:
+                self.accelerator.print(f"Eval data accumulation failed: {e}")
+
+        return result
+
+    def evaluate(self, *args, **kwargs):
+        """Run the normal evaluation loop, then log aggregated pass@k once."""
+        logger.info(f"EVALUATE METHOD: Called at step {self.state.global_step}")
+
+        # Clear any stale accumulators
+        self._logging_window_passk_data.clear()
+        self._step_correct_answers.clear()
+        self._step_problem_ids.clear()
+
+        # Set evaluation mode for proper metric logging
+        self._is_evaluation_mode = True
+
+        out = super().evaluate(*args, **kwargs)
+
+        if self.accelerator.is_main_process:
+            # Calculate pass@k from accumulated step data
+            if self._step_correct_answers and self._step_problem_ids:
+                final_metrics = self._calculate_pass_at_k_once_per_step()
+
+                if final_metrics and wandb.run:
+                    wandb_metrics = {f"eval/pass@{k}": v for k, v in final_metrics.items()}
+
+                    # Log evaluation metrics to current WandB step using commit=False
+                    # This prevents creating a new step and avoids monotonicity issues
+                    wandb.log(wandb_metrics, commit=False)
+
+                    # Log to console as well
+                    formatted_metrics = {f"pass@{k}": f"{v:.4f}" for k, v in final_metrics.items()}
+                    logger.info(f"Eval pass@k at step {self.state.global_step}: {formatted_metrics}")
+                else:
+                    logger.info("EVALUATE METHOD: No final metrics calculated or no wandb run")
+            else:
+                logger.warning("EVALUATE METHOD: No step data available for pass@k calculation")
+
+        # Reset window after logging and reset evaluation mode
+        self._logging_window_passk_data.clear()
+        self._is_evaluation_mode = False
+
+        # Clear step data after evaluation to prepare for next training step
+        logger.info(f"EVALUATE METHOD: Clearing step data after evaluation - had {len(self._step_correct_answers)} answers")
+        self._step_correct_answers.clear()
+        self._step_problem_ids.clear()
+
+        return out
 
     def _should_log_now(self, is_eval: bool) -> bool:
-        """Gate W&B logging by HF/TRL logging/eval strategies/steps."""
+        """Check if we should log metrics based on logging configuration."""
         step = int(self.state.global_step)
         if is_eval:
             eval_strategy = getattr(self.args, "eval_strategy", "no")
             eval_steps = getattr(self.args, "eval_steps", None)
             if eval_strategy == "steps" and eval_steps:
                 return (step % eval_steps == 0) or (step == 0)
-            return eval_strategy != "no"  # if 'epoch' or others, allow
+            return eval_strategy != "no"
         else:
             logging_strategy = getattr(self.args, "logging_strategy", "steps")
             logging_steps = getattr(self.args, "logging_steps", None)
@@ -336,254 +628,50 @@ class IndexedGRPOTrainer(GRPOTrainer):
                 if logging_first_step and step == 0:
                     return True
                 return False
-            return True  # e.g., 'epoch'
+            return True
 
-    def _accumulate_and_maybe_log_passk(self, reward_kwargs, rewards_per_func, reward_func_names):
-        """HF-style behavior: accumulate per-batch local counts, then log windowed train averages
-        and full-eval aggregates at the appropriate times.
-        """
-        # Determine mode
-        is_eval = self._is_evaluation_mode
-
-        # Build local correctness for this batch
-        acc_idx = reward_func_names.index("accuracy_reward")
-        accuracy_rewards = rewards_per_func[:, acc_idx]
-        correct = (accuracy_rewards >= 0.999).to(torch.int32)
-
-        problem_ids = reward_kwargs.get("problem_id", [])
-        if not problem_ids:
-            return
-        device = self.accelerator.device
-        pid_tensor = torch.tensor(problem_ids, device=device, dtype=torch.long)
-        num_generations = int(reward_kwargs.get("num_generations", getattr(self.args, "num_generations", 1)))
-        k_values = self._k_grid(num_generations)
-
-        # Compute local numerators/denominators for this batch
-        local_num: Dict[int, int] = {k: 0 for k in k_values}
-        local_den: Dict[int, int] = {k: 0 for k in k_values}
-        passed_by_pid: Dict[int, List[int]] = {}
-        for p, c in zip(pid_tensor.tolist(), correct.tolist()):
-            passed_by_pid.setdefault(int(p), []).append(int(c))
-        for k in k_values:
-            for arr in passed_by_pid.values():
-                if len(arr) >= k:
-                    local_den[k] += 1
-                    local_num[k] += 1 if sum(arr[:k]) > 0 else 0
-
-        # Helper to add dicts
-        def add_into(dst: Dict[int, int], src: Dict[int, int]):
-            for kk, vv in src.items():
-                dst[kk] = dst.get(kk, 0) + int(vv)
-
-        # --- EVAL path: accumulate across entire eval loop; log once afterwards ---
-        if is_eval:
-            if not self._eval_accumulating:
-                self._eval_accumulating = True
-                self._eval_start_step = int(self.state.global_step)
-            add_into(self._eval_pk_num_local, local_num)
-            add_into(self._eval_pk_den_local, local_den)
-            return
-
-        # --- TRAIN path ---
-        # If we have pending eval accumulations, finalize and log them now
-        if self._eval_accumulating:
-            self._finalize_and_log_eval_passk()
-
-        # Always accumulate train counts; we will log on cadence
-        add_into(self._train_pk_num_local, local_num)
-        add_into(self._train_pk_den_local, local_den)
-
-        if not self._should_log_now(is_eval=False):
-            return
-
-        # Time to emit a windowed train log
-        self._finalize_and_log_train_passk()
-
-    def _finalize_and_log_train_passk(self):
-        device = self.accelerator.device
-        # Reduce sums across processes
-        reduced_rates: Dict[int, float] = {}
-        for k in list(self._train_pk_den_local.keys() | self._train_pk_num_local.keys()):
-            n = torch.tensor(self._train_pk_num_local.get(k, 0), device=device, dtype=torch.int64)
-            d = torch.tensor(self._train_pk_den_local.get(k, 0), device=device, dtype=torch.int64)
-            n = self.accelerator.reduce(n, reduction="sum")
-            d = self.accelerator.reduce(d, reduction="sum")
-            n_i, d_i = int(n.item()), int(d.item())
-            reduced_rates[k] = (n_i / d_i) if d_i else 0.0
-        # Reset accumulators for next window
-        self._train_pk_num_local.clear()
-        self._train_pk_den_local.clear()
-        # Log on main only, at the current global step
-        if self.accelerator.is_main_process and wandb.run:
-            step = int(self.state.global_step)
-            metrics = {f"train/pass_at_k/{k}": v for k, v in reduced_rates.items()}
-            wandb.log(metrics, step=step)
-
-    def _finalize_and_log_eval_passk(self):
-        device = self.accelerator.device
-        reduced_rates: Dict[int, float] = {}
-        for k in list(self._eval_pk_den_local.keys() | self._eval_pk_num_local.keys()):
-            n = torch.tensor(self._eval_pk_num_local.get(k, 0), device=device, dtype=torch.int64)
-            d = torch.tensor(self._eval_pk_den_local.get(k, 0), device=device, dtype=torch.int64)
-            n = self.accelerator.reduce(n, reduction="sum")
-            d = self.accelerator.reduce(d, reduction="sum")
-            n_i, d_i = int(n.item()), int(d.item())
-            reduced_rates[k] = (n_i / d_i) if d_i else 0.0
-        # Capture and reset state BEFORE logging
-        eval_step = self._eval_start_step if self._eval_start_step is not None else int(self.state.global_step)
-        self._eval_pk_num_local.clear()
-        self._eval_pk_den_local.clear()
-        self._eval_accumulating = False
-        self._eval_start_step = None
-        # Log on main only, at the eval step
-        if self.accelerator.is_main_process and wandb.run:
-            metrics = {f"eval/pass_at_k/{k}": v for k, v in reduced_rates.items()}
-            wandb.log(metrics, step=eval_step)
-
-    def _update_legacy_tracker(self, reward_kwargs, rewards_per_func, reward_func_names):
-        """Update the legacy reward tracker with a batch of rewards."""
-        name_map = {"format_reward_func": "format_reward", "accuracy_reward": "accuracy_reward"}
-        num_gens = int(reward_kwargs.get("num_generations", 1))
-        problem_ids = reward_kwargs.get("problem_id", [])
-
-        for i, name in enumerate(reward_func_names):
-            tracker_name = name_map.get(name)
-            if tracker_name:
-                max_len = len(problem_ids) * max(1, num_gens)
-                rewards = rewards_per_func[:max_len, i].detach().cpu().tolist()
-                self.legacy_tracker.update_batch(
-                    rewards=rewards,
-                    reward_function_name=tracker_name,
-                    problem_ids=problem_ids,
-                    num_generations=num_gens,
-                )
-
-    def _record_reward_events(self, prompts, completions, reward_kwargs, rewards_per_func, reward_func_names):
-        """Write one event per completion + stage for step summary."""
-        try:
-            acc_idx = reward_func_names.index("accuracy_reward")
-            fmt_idx = reward_func_names.index("format_reward_func")
-        except ValueError:
-            acc_idx, fmt_idx = None, None
-
-        G = max(1, int(getattr(self.args, "num_generations", 1)))
-        step, ts = int(self.state.global_step), datetime.now().isoformat()
-        targets = reward_kwargs.get("target", [])
-        problem_ids = reward_kwargs.get("problem_id", [])
-        total_completions = len(completions)
-
-        def _phash(txt: str) -> str:
-            return hashlib.sha1(txt.encode("utf-8", errors="ignore")).hexdigest()[:12]
-
-        for i, (p, c) in enumerate(zip(prompts, completions)):
-            pid = _select_for_index(problem_ids, i, G, total_completions)
-            target = _select_for_index(targets, i, G, total_completions)
-
-            acc = float(rewards_per_func[i, acc_idx]) if acc_idx is not None else float("nan")
-            fmt = float(rewards_per_func[i, fmt_idx]) if fmt_idx is not None else float("nan")
-            pred_ans = _extract_boxed_answer(c)
-
-            event = {
-                "ts": ts, "step": step, "problem_id": int(pid),
-                "sample_index": i // G, "gen_index": i % G,
-                "accuracy_reward": acc, "format_reward": fmt,
-                "correct": bool(acc >= 0.999), "target": target,
-                "pred_answer": pred_ans, "prompt_hash": _phash(p),
-            }
-            self.reward_logger.log_event(event)
-
-    def log_step(self, logs):
-        """Add periodic reward statistics logging and saving."""
-        super().log_step(logs)
-
-        if self.accelerator.is_main_process:
-            # Flush the previous step for the modern logger
-            try:
-                if self.reward_logger:
-                    prev_step = int(self.state.global_step) - 1
-                    if prev_step >= 0:
-                        self.reward_logger.flush_step(prev_step)
-                        eval_steps = getattr(self.args, "eval_steps", None)
-                        is_eval_step = bool(eval_steps and prev_step % eval_steps == 0)
-                        if is_eval_step:
-                            # Console-only summary (W&B already handled in _finalize_and_log_eval_passk)
-                            pass_at_k_metrics = self._calculate_pass_at_k_from_step_summary(prev_step)
-                            if pass_at_k_metrics:
-                                logger.info(f"Step {prev_step} EVAL pass@k: {pass_at_k_metrics}")
-            except Exception as e:
-                self.accelerator.print(f"RewardLogger flush_step failed: {e}")
-
-            # Log & snapshot legacy stats
-            if self.legacy_tracker:
-                self.legacy_tracker.log_recent_stats_for_step(self.state.global_step)
-                self.legacy_tracker.save_statistics(step=self.state.global_step)
-
-    def _calculate_pass_at_k_from_step_summary(self, step):
-        """Calculate pass@k from reward logger's step summary (for console)."""
-        if not self.accelerator.is_main_process or not self.reward_logger:
-            return {}
-        try:
-            step_file = self.reward_logger.step_dir / f"step_{step:06d}.json"
-            if not step_file.exists():
-                return {}
-            with open(step_file, 'r') as f:
-                step_data = json.load(f)
-            summaries = step_data.get("summaries", {})
-            if not summaries:
-                return {}
-            num_generations = getattr(self.args, "num_generations", 1)
-            k_values = self._k_grid(num_generations)
-            pass_at_k_metrics = {}
-            for k in k_values:
-                pass_counts = []
-                for problem_summary in summaries.values():
-                    if f"pass@{k}" in problem_summary:
-                        pass_counts.append(problem_summary[f"pass@{k}"])
-                if pass_counts:
-                    pass_at_k_metrics[f"pass@{k}"] = sum(pass_counts) / len(pass_counts)
-            return pass_at_k_metrics
-        except Exception as e:
-            self.accelerator.print(f"Pass@k calculation from step summary failed: {e}")
-            return {}
-
-    def log_final_pass_at_k_statistics(self):
-        """Compute final pass@k statistics across steps (console only)."""
-        if not self.accelerator.is_main_process or not self.reward_logger:
-            return
-        try:
-            step_files = list(self.reward_logger.step_dir.glob("step_*.json"))
-            if not step_files:
-                return
-            num_generations = getattr(self.args, "num_generations", 1)
-            k_values = self._k_grid(num_generations)
-            all_pass_at_k = {k: [] for k in k_values}
-            for step_file in step_files:
-                try:
-                    with open(step_file, 'r') as f:
-                        step_data = json.load(f)
-                    summaries = step_data.get("summaries", {})
-                    if not summaries:
-                        continue
-                    for k in k_values:
-                        pass_counts = []
-                        for problem_summary in summaries.values():
-                            if f"pass@{k}" in problem_summary:
-                                pass_counts.append(problem_summary[f"pass@{k}"])
-                        if pass_counts:
-                            all_pass_at_k[k].append(sum(pass_counts) / len(pass_counts))
-                except Exception as e:
-                    self.accelerator.print(f"Error reading step file {step_file}: {e}")
-                    continue
-            final_metrics = {f"final_pass@{k}": (sum(v)/len(v)) for k, v in all_pass_at_k.items() if v}
-            if final_metrics:
-                logger.info(f"Final pass@k statistics: {final_metrics}")
-        except Exception as e:
-            self.accelerator.print(f"Final pass@k statistics calculation failed: {e}")
-
-    # Public helper to make sure pending eval aggregates are flushed at the end
     def finalize_pending_eval_passk(self):
-        if self._eval_accumulating:
-            self._finalize_and_log_eval_passk()
+        """Flush any pending evaluation pass@k metrics at the end of training."""
+        try:
+            if self.accelerator.is_main_process and self._logging_window_passk_data:
+                # Force logging of any pending evaluation metrics
+                current_step = int(self.state.global_step)
+
+                # Calculate average pass@k across all steps in the window
+                averaged_passk = self._calculate_window_average_passk()
+
+                if averaged_passk:
+                    # Use evaluation mode flag for proper metric naming
+                    prefix = "eval/" if self._is_evaluation_mode else "train/"
+
+                    # Log to WandB with proper metric structure
+                    if wandb.run:
+                        wandb_metrics = {}
+                        for k, v in averaged_passk.items():
+                            wandb_metrics[f"{prefix}pass@{k}"] = v
+                        wandb.log(wandb_metrics)
+
+                        # Format the metrics with more decimal places for display
+                        formatted_metrics = {str(k): f"{v:.4f}" for k, v in averaged_passk.items()}
+                        logger.info(f"Step {current_step} (final {prefix.strip('/')}) avg pass@k over {len(self._logging_window_passk_data)} steps: {formatted_metrics}")
+
+                    # Clear accumulated data for next logging window
+                    self._logging_window_passk_data.clear()
+                    self._logging_window_start_step = current_step
+
+        except Exception as e:
+            self.accelerator.print(f"Finalize eval pass@k failed: {e}")
+
+    def _k_grid(self, num_generations: int):
+        """Generate k values as powers of 2 until num_generations / 2."""
+        k_values = [1]
+        current_k = 2
+        max_k = max(1, num_generations // 2)  # Powers of 2 until num_generations / 2
+        while current_k <= max_k:
+            k_values.append(current_k)
+            current_k *= 2
+        return sorted(list(set(k_values)))
+
 
 ########################
 # Utilities
