@@ -707,10 +707,10 @@ class IndexedGRPOTrainer(GRPOTrainer):
             if not self.accelerator.is_main_process or not self._step_reward_details:
                 return
 
-            # Create filename with step and mode
-            mode_prefix = "eval_" if is_evaluation else "train_"
-            filename = f"{mode_prefix}reward_details_step_{step:06d}.json"
-            filepath = os.path.join(self.args.output_dir, "reward_logs", filename)
+            # Create separate directories for train and eval
+            mode_dir = "eval" if is_evaluation else "train"
+            filename = f"reward_details_step_{step:06d}.json"
+            filepath = os.path.join(self.args.output_dir, "reward_logs", mode_dir, filename)
 
             # Prepare statistics for each problem
             reward_stats = {}
