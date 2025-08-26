@@ -62,7 +62,7 @@ from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
 import wandb
 
 # Import the refactored logging classes
-from reward_logging import RewardLogger, LegacyRewardTracker
+from reward_logging import RewardLogger
 
 ########################
 # Setup logging
@@ -235,7 +235,6 @@ class IndexedGRPOTrainer(GRPOTrainer):
 
         # --- Instantiate reward loggers ---
         self.reward_logger = None
-        self.legacy_tracker = None
         try:
             is_main = self.accelerator.is_main_process
             base_dir = os.path.join(self.args.output_dir, "reward_logs")
@@ -251,7 +250,6 @@ class IndexedGRPOTrainer(GRPOTrainer):
                 num_generations=num_generations,
                 k_defaults=tuple(k_values),
             )
-            self.legacy_tracker = LegacyRewardTracker(is_main=is_main)
         except Exception as e:
             self.accelerator.print(f"Logger instantiation failed: {e}")
 
@@ -1020,11 +1018,6 @@ def grpo_function(
 
     if trainer.accelerator.is_main_process:
         trainer.create_model_card({"tags": ["rl", "grpo"]})
-        # Save and log final legacy reward statistics
-        if trainer.legacy_tracker:
-            logger.info("*** Saving final reward statistics per problem (legacy snapshots) ***")
-            trainer.legacy_tracker.save_statistics(step=trainer.state.global_step)
-            trainer.legacy_tracker.print_summary()
 
     if training_args.push_to_hub:
         logger.info("Pushing to hub...")
