@@ -6,8 +6,21 @@ datasets:
   - path: arm-team/Stage2_RL_gsm8k
     split: test
 
+# Optional validation dataset configuration
+# If provided, will be used for evaluation during training
+validation_datasets:
+  - path: math-ai/amc23
+    split: test
+
 # Field mapping configuration
+# Maps dataset fields to expected question/answer format
 field_mapping:
+  question_field: question
+  answer_field: answer
+
+# Optional validation field mapping configuration
+# If not provided, will use the same mapping as training dataset
+validation_field_mapping:
   question_field: question
   answer_field: answer
 
@@ -22,6 +35,7 @@ bf16: false  # Keep bf16 disabled for MPS
 output_dir: runs/macbook-test-gemma-3-270m
 max_steps: 50  # Very short training for testing
 per_device_train_batch_size: 1  # Minimal batch size
+per_device_eval_batch_size: 2  # Small eval batch size
 gradient_accumulation_steps: 2  # Small accumulation
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
@@ -48,13 +62,19 @@ save_strategy: steps
 save_steps: 10
 save_total_limit: 1
 
+# Evaluation configuration (optional)
+# Only used if validation datasets are provided
+eval_strategy: steps
+eval_steps: 10
+eval_on_start: true
+
 # Script-specific arguments
 dataset_seed: 42
 
 # PEFT configuration - LoRA for Gemma-3
 use_peft: true
-lora_r: 4  # Standard rank for Gemma
-lora_alpha: 8
+lora_r: 2
+lora_alpha: 4
 lora_dropout: 0.1
 lora_task_type: "CAUSAL_LM"
 lora_target_modules:

@@ -937,6 +937,14 @@ def grpo_function(
 
     if training_args.push_to_hub:
         logger.info("Pushing to hub...")
+
+        # Ensure model is in the same dtype as training before uploading
+        if hasattr(training_args, 'torch_dtype') and training_args.torch_dtype:
+            target_dtype = training_args.torch_dtype
+            if hasattr(trainer.model, 'dtype') and trainer.model.dtype != target_dtype:
+                logger.info(f"Converting model from {trainer.model.dtype} to {target_dtype} for hub upload")
+                trainer.model.to(target_dtype)
+
         trainer.push_to_hub(commit_message=f"GRPO training checkpoint - Step {trainer.state.global_step}")
 
     # Flush any pending eval pass@k (e.g., if training ended immediately after eval)
