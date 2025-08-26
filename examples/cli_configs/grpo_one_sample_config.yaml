@@ -71,7 +71,7 @@ save_total_limit: 2
 # Only used if validation datasets are provided
 eval_strategy: steps
 eval_steps: 10
-eval_delay: 0
+eval_on_start: true
 
 # Script-specific arguments
 dataset_seed: 42
