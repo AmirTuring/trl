@@ -39,6 +39,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 import hashlib
 import torch
+from collections import defaultdict
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -266,6 +267,9 @@ class IndexedGRPOTrainer(GRPOTrainer):
         self._logging_window_passk_data = []  # List of pass@k dicts from each step
         self._logging_window_start_step = 0
 
+        # Accumulate detailed reward statistics per problem
+        self._step_reward_details = defaultdict(dict)
+
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         """Override to calculate rewards and compute pass@k metrics."""
         # Track evaluation mode
@@ -330,9 +334,30 @@ class IndexedGRPOTrainer(GRPOTrainer):
             logger.debug(f"_ACCUMULATE_DATA: Processing {len(correct_answers)} answers, {len(problem_ids)} problem IDs, "
                         f"accuracy rewards mean: {sum(accuracy_rewards)/len(accuracy_rewards):.4f}")
 
-            # Accumulate data
+            # Accumulate data for pass@k calculation
             self._step_correct_answers.extend(correct_answers)
             self._step_problem_ids.extend(problem_ids)
+
+            # Accumulate detailed reward statistics per problem
+            try:
+                # Get rewards for each reward function by name
+                reward_arrays = {}
+                for func_idx, func_name in enumerate(self.reward_func_names):
+                    reward_arrays[func_name] = rewards_per_func[:, func_idx].cpu().tolist()
+
+                # Accumulate rewards per problem for each function
+                for i, problem_id in enumerate(problem_ids):
+                    pid = int(problem_id)
+                    if pid not in self._step_reward_details:
+                        self._step_reward_details[pid] = {func_name: [] for func_name in self.reward_func_names}
+
+                    for func_name in self.reward_func_names:
+                        self._step_reward_details[pid][func_name].append(reward_arrays[func_name][i])
+
+                logger.debug(f"_ACCUMULATE_DATA: Accumulated rewards for {len(set(problem_ids))} unique problems")
+
+            except Exception as e:
+                logger.warning(f"Failed to accumulate detailed reward statistics: {e}")
 
             logger.debug(f"_ACCUMULATE_DATA: Total accumulated - {len(self._step_correct_answers)} answers, "
                         f"{len(self._step_problem_ids)} problem IDs")
@@ -542,6 +567,13 @@ class IndexedGRPOTrainer(GRPOTrainer):
             except Exception as e:
                 self.accelerator.print(f"Pass@k logging failed: {e}")
 
+            # Save detailed reward statistics
+            try:
+                if self._step_reward_details:
+                    self._save_detailed_reward_statistics(self.state.global_step, is_evaluation=False)
+            except Exception as e:
+                self.accelerator.print(f"Detailed reward statistics save failed: {e}")
+
         return result
 
     def evaluation_step(self, model, inputs, num_items_in_batch=None):
@@ -572,6 +604,7 @@ class IndexedGRPOTrainer(GRPOTrainer):
         self._logging_window_passk_data.clear()
         self._step_correct_answers.clear()
         self._step_problem_ids.clear()
+        self._step_reward_details.clear()
 
         # Set evaluation mode for proper metric logging
         self._is_evaluation_mode = True
@@ -598,6 +631,13 @@ class IndexedGRPOTrainer(GRPOTrainer):
             else:
                 logger.warning("EVALUATE METHOD: No step data available for pass@k calculation")
 
+            # Save detailed reward statistics for evaluation
+            try:
+                if self._step_reward_details:
+                    self._save_detailed_reward_statistics(self.state.global_step, is_evaluation=True)
+            except Exception as e:
+                logger.warning(f"Failed to save evaluation reward statistics: {e}")
+
         # Reset window after logging and reset evaluation mode
         self._logging_window_passk_data.clear()
         self._is_evaluation_mode = False
@@ -606,6 +646,7 @@ class IndexedGRPOTrainer(GRPOTrainer):
         logger.info(f"EVALUATE METHOD: Clearing step data after evaluation - had {len(self._step_correct_answers)} answers")
         self._step_correct_answers.clear()
         self._step_problem_ids.clear()
+        self._step_reward_details.clear()
 
         return out
 
@@ -661,6 +702,56 @@ class IndexedGRPOTrainer(GRPOTrainer):
 
         except Exception as e:
             self.accelerator.print(f"Finalize eval pass@k failed: {e}")
+
+    def _save_detailed_reward_statistics(self, step: int, is_evaluation: bool = False):
+        """Save detailed reward statistics for the current step."""
+        try:
+            if not self.accelerator.is_main_process or not self._step_reward_details:
+                return
+
+            # Create filename with step and mode
+            mode_prefix = "eval_" if is_evaluation else "train_"
+            filename = f"{mode_prefix}reward_details_step_{step:06d}.json"
+            filepath = os.path.join(self.args.output_dir, "reward_logs", filename)
+
+            # Prepare statistics for each problem
+            reward_stats = {}
+            for problem_id, rewards in self._step_reward_details.items():
+                import numpy as np
+                problem_stats = {
+                    'num_generations': len(next(iter(rewards.values()))) if rewards else 0
+                }
+
+                # Add reward arrays and statistics for each function
+                for func_name, reward_values in rewards.items():
+                    problem_stats[f'{func_name}_rewards'] = reward_values
+                    problem_stats[f'{func_name}_mean'] = float(np.mean(reward_values)) if reward_values else 0.0
+                    problem_stats[f'{func_name}_std'] = float(np.std(reward_values)) if reward_values else 0.0
+
+                reward_stats[str(problem_id)] = problem_stats
+
+            # Save to file
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'w') as f:
+                json.dump({
+                    'step': step,
+                    'timestamp': datetime.now().isoformat(),
+                    'is_evaluation': is_evaluation,
+                    'num_problems': len(reward_stats),
+                    'reward_statistics': reward_stats
+                }, f, indent=2)
+
+            logger.info(f"Saved detailed reward statistics for {len(reward_stats)} problems at step {step} to {filepath}")
+
+            # Clear accumulated data after saving (only during training, keep during eval)
+            if not is_evaluation:
+                self._step_reward_details.clear()
+                logger.debug(f"Cleared reward details after training step {step}")
+            else:
+                logger.debug(f"Keeping reward details for evaluation at step {step}")
+
+        except Exception as e:
+            self.accelerator.print(f"Failed to save detailed reward statistics: {e}")
 
     def _k_grid(self, num_generations: int):
         """Generate k values as powers of 2 until num_generations / 2."""
