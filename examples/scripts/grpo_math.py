@@ -61,9 +61,6 @@ from trl import (
 from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
 import wandb
 
-# Import the refactored logging classes
-from reward_logging import RewardLogger
-
 ########################
 # Setup logging
 ########################
@@ -232,26 +229,6 @@ class IndexedGRPOTrainer(GRPOTrainer):
             self.accelerator.print(f"Trainable params: {trainable:,} / {total:,} ({trainable/total*100:.2f}%)")
         except Exception:
             pass
-
-        # --- Instantiate reward loggers ---
-        self.reward_logger = None
-        try:
-            is_main = self.accelerator.is_main_process
-            base_dir = os.path.join(self.args.output_dir, "reward_logs")
-            run_name = getattr(self.args, "run_name", "grpo-run")
-
-            num_generations = getattr(self.args, "num_generations", 1)
-            k_values = self._k_grid(num_generations)
-
-            self.reward_logger = RewardLogger(
-                base_dir=base_dir,
-                run_name=run_name,
-                is_main=is_main,
-                num_generations=num_generations,
-                k_defaults=tuple(k_values),
-            )
-        except Exception as e:
-            self.accelerator.print(f"Logger instantiation failed: {e}")
 
         # Track evaluation mode
         self._is_evaluation_mode = False
@@ -990,8 +967,6 @@ def grpo_function(
         peft_config=get_peft_config(model_args),
         tokenizer=tokenizer,
     )
-    if getattr(trainer, "reward_logger", None):
-        trainer.reward_logger.write_meta(model_args, training_args, dataset_args)
 
     last_checkpoint = get_checkpoint(training_args)
     if last_checkpoint:
@@ -1036,10 +1011,6 @@ def grpo_function(
 
     # Finalize all logging
     if trainer.accelerator.is_main_process:
-        if getattr(trainer, "reward_logger", None):
-            trainer.reward_logger.flush_step(int(trainer.state.global_step))
-            trainer.reward_logger.finalize()
-            logger.info(f"Modern reward logs written to: {trainer.reward_logger.run_dir}")
         if wandb.run:
             wandb.finish()
             logger.info("W&B logging finished")
