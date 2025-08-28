@@ -1,0 +1,93 @@
+# GRPO Math Training Configuration for MacBook Testing
+# Lightweight configuration for testing enhanced reward tracking features
+
+# Dataset configuration - using a small dataset for testing
+datasets:
+  - path: arm-team/Stage2_RL_gsm8k
+    split: test
+
+# Optional validation dataset configuration
+# If provided, will be used for evaluation during training
+validation_datasets:
+  - path: math-ai/amc23
+    split: test
+
+# Field mapping configuration
+# Maps dataset fields to expected question/answer format
+field_mapping:
+  question_field: question
+  answer_field: answer
+
+# Optional validation field mapping configuration
+# If not provided, will use the same mapping as training dataset
+validation_field_mapping:
+  question_field: question
+  answer_field: answer
+
+# Model configuration - efficient model for MacBook testing
+model_name_or_path: google/gemma-3-270m-it  # 270M parameters, optimized for instruction tuning
+model_revision: main
+attn_implementation: eager  # Recommended for Gemma-3 on MacBook
+torch_dtype: "float32"  # Force float32 on MacBook MPS
+bf16: false  # Keep bf16 disabled for MPS
+
+# Training configuration - minimal resources
+output_dir: runs/macbook-test-gemma-3-270m
+max_steps: 50  # Very short training for testing
+per_device_train_batch_size: 1  # Minimal batch size
+per_device_eval_batch_size: 2  # Small eval batch size
+gradient_accumulation_steps: 2  # Small accumulation
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+learning_rate: 5.0e-5  # Slightly higher for faster convergence
+
+# GRPO specific parameters - minimal settings
+beta: 0.001
+loss_type: "dr_grpo"
+max_prompt_length: 1024  # Shorter prompts
+max_completion_length: 3072  # Shorter completions
+temperature: 0.7
+num_generations: 2  # Fewer generations for faster testing
+reward_weights: [0.5, 0.5]  # Equal weights for format and accuracy
+
+# Disable VLLM for MacBook compatibility
+use_vllm: false
+
+# Logging configuration - frequent logging for testing
+logging_strategy: steps
+logging_steps: 1
+logging_first_step: true
+save_strategy: steps
+save_steps: 10
+save_total_limit: 1
+
+# Evaluation configuration (optional)
+# Only used if validation datasets are provided
+eval_strategy: steps
+eval_steps: 10
+#eval_on_start: true
+
+# Script-specific arguments
+dataset_seed: 42
+
+# PEFT configuration - LoRA for Gemma-3
+use_peft: true
+lora_r: 2
+lora_alpha: 4
+lora_dropout: 0.1
+lora_task_type: "CAUSAL_LM"
+lora_target_modules:
+  - q_proj
+  - v_proj
+
+# Reporting - disable WandB for testing
+report_to: []  # No external reporting
+run_name: macbook-test-gemma-3-270m
+
+# Disable Hugging Face Hub push for testing
+push_to_hub: false
+
+# Additional MacBook optimizations
+dataloader_num_workers: 0  # Single-threaded data loading
+dataloader_pin_memory: false  # Disable pin memory on MacBook

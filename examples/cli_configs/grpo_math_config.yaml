@@ -8,9 +8,9 @@ datasets:
 
 # Optional validation dataset configuration
 # If provided, will be used for evaluation during training
-# validation_datasets:
-#   - path: AmirMohseni/Big-Math-RL-filtered
-#     split: validation
+validation_datasets:
+  - path: AmirMohseni/Big-Math-RL-filtered
+    split: validation
 
 # Field mapping configuration
 # Maps dataset fields to expected question/answer format
@@ -36,7 +36,7 @@ output_dir: runs/qwen-2.5-3b
 num_train_epochs: 1
 max_steps: 1000
 per_device_train_batch_size: 2
-#per_device_eval_batch_size: 2
+per_device_eval_batch_size: 2
 gradient_accumulation_steps: 8
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
@@ -67,9 +67,9 @@ save_total_limit: 2
 
 # Evaluation configuration (optional)
 # Only used if validation datasets are provided
-# eval_strategy: steps
-# eval_steps: 50
-# eval_delay: 0
+eval_strategy: steps
+eval_steps: 50
+eval_on_start: true
 # Note: per_device_eval_batch_size is set above to match training batch size
 
 # Script-specific arguments

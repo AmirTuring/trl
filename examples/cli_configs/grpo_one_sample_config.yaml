@@ -9,8 +9,8 @@ datasets:
 # Optional validation dataset configuration
 # If provided, will be used for evaluation during training
 validation_datasets:
-  - path: HuggingFaceH4/aime_2024
-    split: train
+  - path: math-ai/amc23
+    split: test
 
 # Field mapping configuration
 # Maps dataset fields to expected question/answer format
@@ -21,45 +21,48 @@ field_mapping:
 # Optional validation field mapping configuration
 # If not provided, will use the same mapping as training dataset
 validation_field_mapping:
-  question_field: problem
+  question_field: question
   answer_field: answer
 
 # Model configuration  
-model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+model_name_or_path: Qwen/Qwen2.5-Math-1.5B
 model_revision: main
 torch_dtype: bfloat16
 #attn_implementation: flash_attention_2
 bf16: true
 
 # Training configuration
-output_dir: runs/qwen-2.5-7b
+output_dir: runs/qwen-2.5-math-1.5b
 #num_train_epochs: 20
-max_steps: 1000
-per_device_train_batch_size: 1
-per_device_eval_batch_size: 2
-gradient_accumulation_steps: 16
+max_steps: 100
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 8
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-learning_rate: 1.0e-6
-lr_scheduler_type: cosine
-warmup_ratio: 0.03
+learning_rate: 5.0e-5
+#lr_scheduler_type: cosine
+#warmup_ratio: 0.03
 
 # GRPO specific parameters
 beta: 0.001
 loss_type: "dr_grpo"
-max_prompt_length: 512
-max_completion_length: 3584
-num_generations: 8
+max_prompt_length: 1024
+max_completion_length: 3072
+#temperature: 0.6
+num_generations: 16
+reward_weights: [0.0, 1.0]
 
 # VLLM configuration for fast generation
 use_vllm: true
 vllm_mode: colocate
-vllm_gpu_memory_utilization: 0.4
+vllm_gpu_memory_utilization: 0.25
 
 # Logging configuration
 logging_strategy: steps
-logging_steps: 1
+logging_steps: 5
+logging_first_step: true
 save_strategy: steps
 save_steps: 25
 save_total_limit: 2
@@ -67,30 +70,29 @@ save_total_limit: 2
 # Evaluation configuration (optional)
 # Only used if validation datasets are provided
 eval_strategy: steps
-eval_steps: 25
-eval_delay: 0
-# Note: per_device_eval_batch_size is set above to match training batch size
+eval_steps: 10
+eval_on_start: true
 
 # Script-specific arguments
 dataset_seed: 42
 
 # PEFT configuration
-use_peft: true
-lora_r: 16
-lora_alpha: 32
-lora_dropout: 0.1
-lora_task_type: "CAUSAL_LM"
-lora_target_modules:
-  - q_proj
-  - k_proj
-  - v_proj
+#use_peft: false
+#lora_r: 16
+#lora_alpha: 32
+#lora_dropout: 0.1
+#lora_task_type: "CAUSAL_LM"
+#lora_target_modules:
+#  - q_proj
+#  - k_proj
+#  - v_proj
 
 # Reporting
 report_to: 
   - wandb
-run_name: grpo-qwen-2.5-7b-20-10
+run_name: grpo-qwen-2.5-math-1.5b-16-58
 
 # Hugging Face Hub
 push_to_hub: true
 hub_strategy: every_save
-hub_model_id: AmirMohseni/qwen-qwen-2.5-7b
+hub_model_id: AmirMohseni/qwen-qwen-2.5-math-1.5b-pi13-v2
