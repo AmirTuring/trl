@@ -7,3 +7,4 @@ vllm
 wandb
 hf_transfer
 peft
+flash-attn --no-build-isolation

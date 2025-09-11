@@ -61,6 +61,17 @@ from trl import (
 from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
 import wandb
 
+# Import reward functions from the reward_funcs module
+import sys
+from pathlib import Path
+
+# Add TRL root to Python path to access reward_funcs
+script_dir = Path(__file__).parent
+trl_root = script_dir.parent.parent  # examples/scripts -> examples -> trl
+sys.path.insert(0, str(trl_root))
+
+from reward_funcs import format_reward_func, accuracy_reward_func
+
 ########################
 # Setup logging
 ########################
@@ -85,124 +96,6 @@ class ScriptArguments(TrlScriptArguments):
     validation_field_mapping: FieldMappingConfig = field(default_factory=lambda: None)
     validation_datasets: List[Dict[str, Any]] = field(default_factory=list, metadata={"help": "List of validation dataset configurations"})
 
-
-########################
-# Helper functions
-########################
-
-def _extract_boxed_answer(completion: str) -> str:
-    """Extract answer from \\boxed{} format, handling nested braces."""
-    if "\\boxed{" not in completion:
-        return completion
-    start_idx = completion.find("\\boxed{") + 7
-    brace_count = 1
-    end_idx = start_idx
-    while end_idx < len(completion) and brace_count > 0:
-        if completion[end_idx] == "{":
-            brace_count += 1
-        elif completion[end_idx] == "}":
-            brace_count -= 1
-        end_idx += 1
-    return completion[start_idx:end_idx - 1].strip()
-
-def _select_for_index(arr, i, G, total_len):
-    """Robustly select arr item for completion index i."""
-    if isinstance(arr, (list, tuple)):
-        if len(arr) == total_len:
-            return arr[i]
-        if len(arr) * G == total_len:
-            return arr[i // max(1, G)]
-        if len(arr) == 1:
-            return arr[0]
-        # fallback
-        return arr[min(i, len(arr) - 1)]
-    return arr
-
-########################
-# Reward functions
-########################
-
-def format_reward_func(completions, **kwargs):
-    """
-    Evaluates completions based on strict format:
-      <think> ...nonempty reasoning... </think> followed by exactly one \\boxed{...}
-
-    Rewarding scheme:
-      -1.0 : invalid / reward hacking attempt
-       0.0 : partially correct but missing constraints
-       1.0 : valid format
-    """
-    rewards = []
-    for completion in completions:
-        try:
-            # Ensure consistency with prompt (prepend <think>)
-            completion = "<think>" + completion
-
-            if random.random() < 0.01:
-                os.makedirs("completion_samples", exist_ok=True)
-                with open("completion_samples/format_completion_samples.txt", "a") as f:
-                    f.write("\n\n==============\n")
-                    f.write(completion)
-
-            think_pattern = r"^<think>(.*?)</think>"
-            think_match = re.search(think_pattern, completion, re.DOTALL)
-
-            if not think_match:
-                rewards.append(-1.0)
-                continue
-
-            think_content = think_match.group(1).strip()
-            after_think = completion[think_match.end():]
-
-            if len(think_content) < 10 or "<think>" in after_think:
-                rewards.append(-1.0)
-                continue
-
-            boxed_matches = re.findall(r"\\boxed\{.*?\}", completion)
-            if len(boxed_matches) != 1 or "\\boxed{" not in after_think:
-                rewards.append(-1.0)
-                continue
-
-            if len(after_think.strip()) > 4 * len(think_content):
-                rewards.append(0.0)
-                continue
-
-            rewards.append(1.0)
-        except Exception:
-            rewards.append(0.0)
-
-    return rewards
-
-def accuracy_reward(completions, target, num_generations: int = 1, **kwargs):
-    """
-    Reward function that evaluates mathematical correctness using math_verify.
-    """
-    verify_func = math_metric(
-        gold_extraction_target=(LatexExtractionConfig(),),
-        pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
-    )
-
-    rewards = []
-    G = max(1, int(num_generations))
-    total = len(completions)
-
-    for i, completion in enumerate(completions):
-        try:
-            ground_truth = _select_for_index(target, i, G, total)
-            completion_answer = _extract_boxed_answer(completion)
-            completion_answer = "\\boxed{" + completion_answer + "}"
-            ground_truth_boxed = "\\boxed{" + str(ground_truth) + "}"
-
-            if ground_truth_boxed.strip().lower() == completion_answer.strip().lower():
-                reward = 1.0
-            else:
-                score, _ = verify_func([ground_truth_boxed], [completion_answer])
-                reward = float(score)
-        except Exception:
-            reward = 0.0
-        rewards.append(reward)
-
-    return rewards
 
 ########################
 # Trainer
@@ -957,7 +850,7 @@ def grpo_function(
     logger.info(f"Sample target: {sample['target']}")
     logger.info(f"Sample problem_id: {sample['problem_id']}")
 
-    reward_functions = [format_reward_func, accuracy_reward]
+    reward_functions = [format_reward_func, accuracy_reward_func]
     trainer = IndexedGRPOTrainer(
         model=model_args.model_name_or_path,
         reward_funcs=reward_functions,
