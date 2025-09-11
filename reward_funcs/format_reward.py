@@ -8,7 +8,7 @@ strict format requirements: <think>...</think> followed by exactly one \\boxed{.
 import os
 import re
 import random
-from typing import List
+from typing import List, Dict, Any
 
 from .base import BaseRewardFunction
 
@@ -98,3 +98,22 @@ class FormatReward(BaseRewardFunction):
                 rewards.append(0.0)
         
         return rewards
+    
+    def get_state(self) -> Dict[str, Any]:
+        """Get the serializable state of the FormatReward function."""
+        state = super().get_state()
+        state.update({
+            'sampling_rate': self.sampling_rate,
+            'min_think_length': self.min_think_length,
+            'max_ratio': self.max_ratio,
+        })
+        return state
+    
+    @classmethod
+    def from_state(cls, state: Dict[str, Any]) -> 'FormatReward':
+        """Create a FormatReward instance from a serialized state."""
+        return cls(
+            sampling_rate=state.get('sampling_rate', 0.01),
+            min_think_length=state.get('min_think_length', 10),
+            max_ratio=state.get('max_ratio', 4.0)
+        )

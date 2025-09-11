@@ -73,6 +73,9 @@ import wandb
 # Import reward functions from the reward_funcs module
 from reward_funcs import format_reward_func, accuracy_reward_func
 
+# Import system prompts
+from prompts import THINK_SYSTEM_PROMPT
+
 ########################
 # Setup logging
 ########################
@@ -772,7 +775,7 @@ def grpo_function(
             conversation = [
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant. You first think about the reasoning process in your mind and then provide the user with the answer.",
+                    "content": THINK_SYSTEM_PROMPT,
                 },
                 {
                     "role": "user",

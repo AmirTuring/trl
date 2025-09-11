@@ -6,7 +6,7 @@ using math_verify with optional LLM-as-a-judge fallback when math_verify fails o
 """
 
 import logging
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Dict
 from abc import abstractmethod
 
 from .base import BaseRewardFunction, _extract_boxed_answer, _select_for_index
@@ -54,6 +54,21 @@ class LLMJudgeEvaluator:
         # TODO: Implement LLM-based evaluation
         # For now, return 0.0 as placeholder
         return 0.0
+    
+    def get_state(self) -> Dict[str, Any]:
+        """Get the serializable state of the LLM judge evaluator."""
+        return {
+            'model_name': self.model_name,
+            'api_key': self.api_key,
+        }
+    
+    @classmethod
+    def from_state(cls, state: Dict[str, Any]) -> 'LLMJudgeEvaluator':
+        """Create an LLMJudgeEvaluator instance from a serialized state."""
+        return cls(
+            model_name=state.get('model_name'),
+            api_key=state.get('api_key')
+        )
 
 
 class AccuracyReward(BaseRewardFunction):
@@ -169,3 +184,42 @@ class AccuracyReward(BaseRewardFunction):
         """
         llm_judge = LLMJudgeEvaluator(model_name, api_key)
         return cls(llm_judge=llm_judge)
+    
+    def get_state(self) -> Dict[str, Any]:
+        """Get the serializable state of the AccuracyReward function."""
+        state = super().get_state()
+        state.update({
+            'llm_judge_state': self.llm_judge.get_state() if self.llm_judge else None,
+        })
+        return state
+    
+    @classmethod
+    def from_state(cls, state: Dict[str, Any]) -> 'AccuracyReward':
+        """Create an AccuracyReward instance from a serialized state."""
+        llm_judge = None
+        if state.get('llm_judge_state'):
+            llm_judge = LLMJudgeEvaluator.from_state(state['llm_judge_state'])
+        
+        return cls(llm_judge=llm_judge)
+    
+    def __getstate__(self) -> Dict[str, Any]:
+        """Support for pickle serialization."""
+        # For pickle, we need to handle the math_verify function specially
+        # since it may not be directly serializable
+        state = self.get_state()
+        # Store the fact that we need to reinitialize math_verify
+        state['_needs_math_verify_init'] = True
+        return state
+    
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Support for pickle deserialization."""
+        # Reconstruct from state
+        reconstructed = self.from_state(state)
+        self.__dict__.update(reconstructed.__dict__)
+        
+        # Reinitialize math_verify if needed
+        if state.get('_needs_math_verify_init', False):
+            self.verify_func = math_metric(
+                gold_extraction_target=(LatexExtractionConfig(),),
+                pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
+            )

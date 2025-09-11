@@ -9,6 +9,12 @@ the existing GRPO trainer interface.
 from .base import BaseRewardFunction
 from .format_reward import FormatReward
 from .accuracy_reward import AccuracyReward, LLMJudgeEvaluator
+from .serialization import (
+    serialize_reward_function,
+    deserialize_reward_function,
+    create_serializable_reward_wrapper,
+    make_trl_rewards_serializable
+)
 
 # For backward compatibility with existing function-based interface
 def format_reward_func(completions, target, **kwargs):
@@ -27,5 +33,9 @@ __all__ = [
     'AccuracyReward',
     'LLMJudgeEvaluator',
     'format_reward_func',
-    'accuracy_reward_func'
+    'accuracy_reward_func',
+    'serialize_reward_function',
+    'deserialize_reward_function',
+    'create_serializable_reward_wrapper',
+    'make_trl_rewards_serializable'
 ]
