@@ -161,7 +161,7 @@ class AccuracyReward(BaseRewardFunction):
         Create an AccuracyReward instance with LLM judge fallback.
         
         Args:
-            model_name: Name of the LLM to use for evaluation (default: gpt-5-nano)
+            model_name: Name of the LLM to use for evaluation
             api_key: API key for the LLM service
             
         Returns:

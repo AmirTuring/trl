@@ -41,6 +41,15 @@ import hashlib
 import torch
 from collections import defaultdict
 
+# Setup paths for imports
+import sys
+from pathlib import Path
+
+# Add TRL root to Python path to access both trl and reward_funcs
+script_dir = Path(__file__).parent
+trl_root = script_dir.parent.parent  # examples/scripts -> examples -> trl
+sys.path.insert(0, str(trl_root))
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -62,14 +71,6 @@ from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
 import wandb
 
 # Import reward functions from the reward_funcs module
-import sys
-from pathlib import Path
-
-# Add TRL root to Python path to access reward_funcs
-script_dir = Path(__file__).parent
-trl_root = script_dir.parent.parent  # examples/scripts -> examples -> trl
-sys.path.insert(0, str(trl_root))
-
 from reward_funcs import format_reward_func, accuracy_reward_func
 
 ########################
@@ -190,7 +191,7 @@ class IndexedGRPOTrainer(GRPOTrainer):
                         f"batch_size={len(reward_kwargs.get('problem_id', []))}")
 
             # Find accuracy reward index
-            acc_idx = reward_func_names.index("accuracy_reward")
+            acc_idx = reward_func_names.index("accuracy_reward_func")
 
             # Get accuracy rewards and determine correct answers
             accuracy_rewards = rewards_per_func[:, acc_idx].cpu().tolist()
