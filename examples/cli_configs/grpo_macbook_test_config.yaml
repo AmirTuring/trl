@@ -25,14 +25,14 @@ validation_field_mapping:
   answer_field: answer
 
 # Model configuration - efficient model for MacBook testing
-model_name_or_path: google/gemma-3-270m-it  # 270M parameters, optimized for instruction tuning
+model_name_or_path: Qwen/Qwen3-0.6B  # 270M parameters, optimized for instruction tuning
 model_revision: main
-attn_implementation: eager  # Recommended for Gemma-3 on MacBook
-torch_dtype: "float32"  # Force float32 on MacBook MPS
-bf16: false  # Keep bf16 disabled for MPS
+attn_implementation: eager  # Recommended for smaller models on MacBook
+torch_dtype: "float16"  # MPS supports float16 efficiently
+bf16: false  # Keep bf16 disabled for MPS compatibility
 
-# Training configuration - minimal resources
-output_dir: runs/macbook-test-gemma-3-270m
+# Training configuration - minimal resources optimized for MPS
+output_dir: runs/macbook-test-qwen-3-0.6b
 max_steps: 50  # Very short training for testing
 per_device_train_batch_size: 1  # Minimal batch size
 per_device_eval_batch_size: 2  # Small eval batch size
@@ -45,8 +45,8 @@ learning_rate: 5.0e-5  # Slightly higher for faster convergence
 # GRPO specific parameters - minimal settings
 beta: 0.001
 loss_type: "dr_grpo"
-max_prompt_length: 1024  # Shorter prompts
-max_completion_length: 3072  # Shorter completions
+max_prompt_length: 512  # Shorter prompts
+max_completion_length: 1024  # Shorter completions
 temperature: 0.7
 num_generations: 2  # Fewer generations for faster testing
 reward_weights: [0.5, 0.5]  # Equal weights for format and accuracy
@@ -73,21 +73,20 @@ dataset_seed: 42
 
 # PEFT configuration - LoRA for Gemma-3
 use_peft: true
-lora_r: 2
-lora_alpha: 4
+lora_r: 1
+lora_alpha: 2
 lora_dropout: 0.1
 lora_task_type: "CAUSAL_LM"
-lora_target_modules:
-  - q_proj
-  - v_proj
+lora_target_modules: ["q_proj", "k_proj", "v_proj"]
 
 # Reporting - disable WandB for testing
 report_to: []  # No external reporting
-run_name: macbook-test-gemma-3-270m
+run_name: macbook-test-qwen-3-0.6b
 
 # Disable Hugging Face Hub push for testing
 push_to_hub: false
 
-# Additional MacBook optimizations
-dataloader_num_workers: 0  # Single-threaded data loading
-dataloader_pin_memory: false  # Disable pin memory on MacBook
+# Additional MacBook MPS optimizations
+dataloader_num_workers: 0  # Single-threaded data loading (required for MPS stability)
+dataloader_pin_memory: false  # Disable pin memory on MacBook MPS
+remove_unused_columns: false  # Avoid potential MPS issues with column removal
