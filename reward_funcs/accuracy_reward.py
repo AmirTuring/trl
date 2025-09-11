@@ -31,7 +31,7 @@ class LLMJudgeEvaluator:
             model_name: Name of the LLM to use for evaluation
             api_key: API key for the LLM service
         """
-        self.model_name = model_name or "gpt-4"
+        self.model_name = model_name
         self.api_key = api_key
         # TODO: Initialize LLM client (OpenAI, Anthropic, etc.)
         
@@ -156,7 +156,7 @@ class AccuracyReward(BaseRewardFunction):
         return cls(llm_judge=None)
     
     @classmethod
-    def with_llm_fallback(cls, model_name: str = "gpt-4", api_key: Optional[str] = None) -> 'AccuracyReward':
+    def with_llm_fallback(cls, model_name: str, api_key: Optional[str] = None) -> 'AccuracyReward':
         """
         Create an AccuracyReward instance with LLM judge fallback.
         
