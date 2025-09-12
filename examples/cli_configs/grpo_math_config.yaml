@@ -48,8 +48,8 @@ warmup_ratio: 0.03
 # GRPO specific parameters
 beta: 0.001
 loss_type: "dr_grpo"
-max_prompt_length: 512
-max_completion_length: 2048
+max_prompt_length: 1024
+max_completion_length: 2560
 num_generations: 8
 reward_weights: [0.2, 1.0] # [format w, accuracy w]
 

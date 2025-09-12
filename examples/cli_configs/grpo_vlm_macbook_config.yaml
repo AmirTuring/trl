@@ -1,16 +1,16 @@
 # GRPO VLM Training Configuration for MacBook Testing
-# Lightweight configuration for testing vision-language models with GRPO
+# Lightweight configuration for testing vision-language models with GRPO on mathematical reasoning
 
-# Dataset configuration - using a small dataset for testing
+# Dataset configuration - using a small subset for testing
 datasets:
   - path: Osilly/Vision-R1-rl
     split: train[:5%]
 
 # Optional validation dataset configuration
 # If provided, will be used for evaluation during training
-#validation_datasets:
-#  - path: Osilly/Vision-R1-rl
-#    split: test
+validation_datasets:
+  - path: Osilly/Vision-R1-rl
+    split: test[:2%]
 
 # Field mapping configuration
 # Maps dataset fields to expected question/answer/image format
@@ -21,29 +21,32 @@ field_mapping:
 
 # Optional validation field mapping configuration
 # If not provided, will use the same mapping as training dataset
-#validation_field_mapping:
-#  question_field: problem
-#  answer_field: answer
-#  image_field: images
+# validation_field_mapping:
+#   question_field: problem
+#   answer_field: answer
+#   image_field: images
 
 # Model configuration - efficient model for MacBook testing
-model_name_or_path: OpenGVLab/InternVL3_5-1B  # Optimized for instruction tuning
+model_name_or_path: Qwen/Qwen2-VL-2B-Instruct
 model_revision: main
-attn_implementation: eager  # Recommended for smaller models on MacBook
 torch_dtype: "float16"  # Use float16 for MPS efficiency
+attn_implementation: eager  # Recommended for smaller models on MacBook
 bf16: false  # Keep bf16 disabled for MPS compatibility
-trust_remote_code: true  # Required for Qwen2-VL
+trust_remote_code: true  # Required for VLM models
 
-# Training configuration - minimal resources optimized for MPS
-output_dir: runs/macbook-test-internvl-1b
-max_steps: 10  # Very short training for testing
+# Training configuration - minimal resources optimized for MacBook
+output_dir: runs/macbook-test-qwen2-vl-2b
+num_train_epochs: 1
+max_steps: 20  # Very short training for testing
 per_device_train_batch_size: 1  # Minimal batch size
-#per_device_eval_batch_size: 2  # Small eval batch size
+per_device_eval_batch_size: 1   # Minimal eval batch size
 gradient_accumulation_steps: 2  # Small accumulation
-#gradient_checkpointing: true
-#gradient_checkpointing_kwargs:
-#  use_reentrant: false
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
 learning_rate: 5.0e-5  # Slightly higher for faster convergence
+lr_scheduler_type: linear
+warmup_ratio: 0.1
 
 # GRPO specific parameters - minimal settings
 beta: 0.001
@@ -52,7 +55,7 @@ max_prompt_length: 1536  # Shorter prompts
 max_completion_length: 2048  # Shorter completions
 temperature: 0.7
 num_generations: 2  # Fewer generations for faster testing
-reward_weights: [0.2, 1.0]  # Equal weights for format and accuracy
+reward_weights: [0.2, 1.0]  # [format w, accuracy w]
 
 # Disable VLLM for MacBook compatibility
 use_vllm: false
@@ -67,24 +70,32 @@ save_total_limit: 1
 
 # Evaluation configuration (optional)
 # Only used if validation datasets are provided
-#eval_strategy: steps
-#eval_steps: 10
-#eval_on_start: true
+eval_strategy: steps
+eval_steps: 10
+eval_on_start: true
 
 # Script-specific arguments
 dataset_seed: 42
 
-# PEFT configuration - LoRA for Qwen2.5-VL
+# PEFT configuration - LoRA for Qwen2-VL
 use_peft: true
-lora_r: 1
-lora_alpha: 2
+lora_r: 8  # Smaller rank for faster training
+lora_alpha: 16
 lora_dropout: 0.1
 lora_task_type: "CAUSAL_LM"
-lora_target_modules: ["q_proj", "v_proj"]
+lora_target_modules:
+  - q_proj
+  - v_proj
+  - o_proj
 
 # Reporting - disable WandB for testing
 report_to: []  # No external reporting
-run_name: macbook-test-internvl-1b
+run_name: macbook-test-qwen2-vl-2b
 
 # Disable Hugging Face Hub push for testing
 push_to_hub: false
+
+# Additional MacBook optimizations - conservative settings for stability
+dataloader_num_workers: 0  # Single-threaded data loading for stability
+dataloader_pin_memory: false  # Disable pin memory on MacBook
+remove_unused_columns: false  # Avoid potential issues with column removal
