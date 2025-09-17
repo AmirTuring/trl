@@ -75,6 +75,13 @@ eval_on_start: true
 # Script-specific arguments
 dataset_seed: 42
 
+# LLM Judge configuration for accuracy reward
+use_llm_judge: true  # Set to false to use only math_verify (no LLM fallback)
+llm_judge_model_name: gpt-5-mini
+llm_judge_api_key_name: OPENAI_API_KEY
+# llm_judge_base_url: null  # Optional: custom API endpoint
+llm_judge_temperature: 0.0
+
 # PEFT configuration
 use_peft: true
 lora_r: 16
@@ -90,6 +97,7 @@ lora_target_modules:
 report_to: 
   - wandb
 run_name: grpo-qwen-2.5-3b-19-50-lora
+project_name: grpo-math-training
 
 # Hugging Face Hub
 push_to_hub: true

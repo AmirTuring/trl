@@ -6,14 +6,27 @@ using math_verify with optional LLM-as-a-judge fallback when math_verify fails o
 """
 
 import logging
+import os
 from typing import List, Any, Optional, Dict
 from abc import abstractmethod
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
 from .base import BaseRewardFunction, _extract_boxed_answer, _select_for_index
 from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
+from ..prompts import LLM_JUDGE_PROMPT
 
 logger = logging.getLogger(__name__)
 
+class CorrectnessReward(BaseModel):
+    correctness: float = Field(description="The correctness of the answer given the ground truth answer. If the given answer is matching the ground truth answer, return 1.0, otherwise return 0.0. If no answer was given, return 0.0.")
+
+class LLMJudgeConfig(BaseModel):
+    """Configuration for LLM judge evaluator."""
+    model_name: str = Field(description="Name of the LLM model to use")
+    api_key_name: str = Field(default="OPENAI_API_KEY", description="Environment variable name for the API key")
+    base_url: Optional[str] = Field(default=None, description="Base URL for the API endpoint")
+    temperature: float = Field(default=0.0, description="Temperature for LLM generation")
 
 class LLMJudgeEvaluator:
     """
@@ -23,17 +36,31 @@ class LLMJudgeEvaluator:
     fails or returns 0.
     """
     
-    def __init__(self, model_name: Optional[str] = None, api_key: Optional[str] = None):
+    def __init__(self, config: LLMJudgeConfig):
         """
         Initialize LLM judge evaluator.
         
         Args:
-            model_name: Name of the LLM to use for evaluation
-            api_key: API key for the LLM service
+            config: Configuration object containing LLM settings
         """
-        self.model_name = model_name
-        self.api_key = api_key
-        # TODO: Initialize LLM client (OpenAI, Anthropic, etc.)
+        self.config = config
+        
+        # Get API key from environment
+        api_key = os.getenv(config.api_key_name)
+        if not api_key:
+            raise ValueError(f"API key not found in environment variable: {config.api_key_name}")
+        
+        # Initialize ChatOpenAI with config
+        llm_kwargs = {
+            "model": config.model_name,
+            "api_key": api_key,
+            "temperature": config.temperature
+        }
+        
+        if config.base_url:
+            llm_kwargs["base_url"] = config.base_url
+            
+        self.llm = ChatOpenAI(**llm_kwargs).with_structured_output(CorrectnessReward)
         
     def evaluate(self, completion_answer: str, ground_truth: str) -> float:
         """
@@ -51,24 +78,29 @@ class LLMJudgeEvaluator:
         Returns:
             Float score between 0.0 and 1.0
         """
-        # TODO: Implement LLM-based evaluation
-        # For now, return 0.0 as placeholder
-        return 0.0
+        try:
+            # Create a prompt for the LLM judge to compare answers
+            prompt = LLM_JUDGE_PROMPT.format(ground_truth=ground_truth, completion_answer=completion_answer)
+
+            # Call the LLM with structured output
+            result = self.llm.invoke(prompt)
+            return result.correctness
+            
+        except Exception as e:
+            logger.error(f"LLM judge evaluation failed: {e}")
+            return 0.0
     
     def get_state(self) -> Dict[str, Any]:
         """Get the serializable state of the LLM judge evaluator."""
         return {
-            'model_name': self.model_name,
-            'api_key': self.api_key,
+            'config': self.config.model_dump(),
         }
     
     @classmethod
     def from_state(cls, state: Dict[str, Any]) -> 'LLMJudgeEvaluator':
         """Create an LLMJudgeEvaluator instance from a serialized state."""
-        return cls(
-            model_name=state.get('model_name'),
-            api_key=state.get('api_key')
-        )
+        config = LLMJudgeConfig(**state['config'])
+        return cls(config=config)
 
 
 class AccuracyReward(BaseRewardFunction):
@@ -171,18 +203,17 @@ class AccuracyReward(BaseRewardFunction):
         return cls(llm_judge=None)
     
     @classmethod
-    def with_llm_fallback(cls, model_name: str, api_key: Optional[str] = None) -> 'AccuracyReward':
+    def with_llm_fallback(cls, config: LLMJudgeConfig) -> 'AccuracyReward':
         """
         Create an AccuracyReward instance with LLM judge fallback.
         
         Args:
-            model_name: Name of the LLM to use for evaluation
-            api_key: API key for the LLM service
+            config: Configuration object containing LLM settings
             
         Returns:
             AccuracyReward instance configured with LLM judge fallback
         """
-        llm_judge = LLMJudgeEvaluator(model_name, api_key)
+        llm_judge = LLMJudgeEvaluator(config)
         return cls(llm_judge=llm_judge)
     
     def get_state(self) -> Dict[str, Any]:

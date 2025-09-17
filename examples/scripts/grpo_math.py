@@ -72,7 +72,7 @@ from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
 import wandb
 
 # Import reward functions from the reward_funcs module
-from reward_funcs import format_reward_func, accuracy_reward_func
+from reward_funcs import format_reward_func, AccuracyReward, LLMJudgeConfig, FormatReward
 
 # Import system prompts
 from prompts import THINK_SYSTEM_PROMPT
@@ -100,11 +100,13 @@ class ScriptArguments(TrlScriptArguments):
     field_mapping: FieldMappingConfig = field(default_factory=FieldMappingConfig)
     validation_field_mapping: FieldMappingConfig = field(default_factory=lambda: None)
     validation_datasets: List[Dict[str, Any]] = field(default_factory=list, metadata={"help": "List of validation dataset configurations"})
-
-
-########################
-# Trainer
-########################
+    
+    # LLM Judge configuration for accuracy reward
+    use_llm_judge: bool = field(default=False, metadata={"help": "Whether to use LLM judge as fallback for accuracy evaluation"})
+    llm_judge_model_name: str = field(default="gpt-5-mini", metadata={"help": "Model name for LLM judge evaluation"})
+    llm_judge_api_key_name: str = field(default="OPENAI_API_KEY", metadata={"help": "Environment variable name for LLM judge API key"})
+    llm_judge_base_url: str = field(default=None, metadata={"help": "Base URL for LLM judge API endpoint"})
+    llm_judge_temperature: float = field(default=0.0, metadata={"help": "Temperature for LLM judge generation"})
 
 
 
@@ -149,12 +151,13 @@ def grpo_function(
         }
 
         run_name = getattr(training_args, "run_name", "grpo-math-training")
+        project_name = getattr(training_args, "project_name", "grpo-math-training")
 
         wandb_token = os.getenv("WANDB_API_KEY")
         if wandb_token:
             wandb.login(key=wandb_token)
         wandb.init(
-            project="grpo-math-training",
+            project=project_name,
             name=run_name,
             config=wandb_config,
             tags=["grpo", "math", "reasoning"],
@@ -326,7 +329,24 @@ def grpo_function(
     logger.info(f"Sample target: {sample['target']}")
     logger.info(f"Sample problem_id: {sample['problem_id']}")
 
-    reward_functions = [format_reward_func, accuracy_reward_func]
+    # Initialize reward functions with configuration
+    format_reward = FormatReward()
+    
+    if script_args.use_llm_judge:
+        # Create LLM judge configuration from script arguments
+        llm_judge_config = LLMJudgeConfig(
+            model_name=script_args.llm_judge_model_name,
+            api_key_name=script_args.llm_judge_api_key_name,
+            base_url=script_args.llm_judge_base_url,
+            temperature=script_args.llm_judge_temperature
+        )
+        accuracy_reward = AccuracyReward.with_llm_fallback(llm_judge_config)
+        logger.info("Using AccuracyReward with LLM judge fallback")
+    else:
+        accuracy_reward = AccuracyReward.with_math_verify_only()
+        logger.info("Using AccuracyReward with math_verify only (no LLM judge)")
+    
+    reward_functions = [format_reward, accuracy_reward]
     trainer = IndexedGRPOTrainer(
         model=model_args.model_name_or_path,
         reward_funcs=reward_functions,

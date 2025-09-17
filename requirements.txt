@@ -7,4 +7,6 @@ vllm
 wandb
 hf_transfer
 peft
-flash-attn --no-build-isolation
+#flash-attn --no-build-isolation
+langchain_openai
+python-dotenv
