@@ -1505,6 +1505,7 @@ def print_prompt_completions_sample(
     advantages: list[float],
     step: int,
     num_samples: int = None,
+    targets: list[str] = None,
 ) -> None:
     """
     Print out a sample of model completions to the console with multiple reward metrics.
@@ -1525,6 +1526,8 @@ def print_prompt_completions_sample(
             Current training step number, used in the output title.
         num_samples (`int` or `None`, *optional*, defaults to `None`):
             Number of random samples to display. If `None` (default), all items will be displayed.
+        targets (`list[str]` or `None`, *optional*, defaults to `None`):
+            List of target answers corresponding to the prompts. If provided, will be displayed in the table.
 
     Example:
     ```python
@@ -1557,6 +1560,8 @@ def print_prompt_completions_sample(
     # Add columns
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
+    if targets is not None:
+        table.add_column("Target", style="bright_blue")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
     table.add_column("Advantage", style="bold magenta", justify="right")
@@ -1575,10 +1580,18 @@ def print_prompt_completions_sample(
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
         advantages = [advantages[i] for i in indices]
+        if targets is not None:
+            targets = [targets[i] for i in indices]
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
-        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values, f"{advantages[i]:.2f}")
+        row_data = [Text(prompts[i]), Text(completions[i])]
+        if targets is not None:
+            target_text = str(targets[i]) if targets[i] is not None else "N/A"
+            row_data.append(Text(target_text))
+        row_data.extend(reward_values)
+        row_data.append(f"{advantages[i]:.2f}")
+        table.add_row(*row_data)
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")

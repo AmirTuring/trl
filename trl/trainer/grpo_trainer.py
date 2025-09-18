@@ -753,6 +753,7 @@ class GRPOTrainer(Trainer):
             "image": deque(maxlen=args.generation_batch_size),
             "prompt": deque(maxlen=args.generation_batch_size),
             "completion": deque(maxlen=args.generation_batch_size),
+            "target": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
             "advantages": deque(maxlen=args.generation_batch_size),
         }
@@ -1336,6 +1337,13 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
+        
+        # Extract targets if available for logging
+        has_targets = "target" in inputs[0]
+        if has_targets:
+            targets = [example.get("target") for example in inputs]
+        else:
+            targets = None
 
         # We don't yet support visual reward models/function, so we keep a copy of the original text-only prompts for
         # later use in the reward computation. If images are present, we insert {"type": "image"} as required by the
@@ -1732,6 +1740,12 @@ class GRPOTrainer(Trainer):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
+        if has_targets:
+            self._logs["target"].extend(gather_object(targets))
+        else:
+            # Add None values to maintain alignment with other logs
+            self._logs["target"].extend([None] * len(prompts_text))
+
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
@@ -1955,6 +1969,7 @@ class GRPOTrainer(Trainer):
                     self._logs["advantages"],
                     self.state.global_step,
                     self.num_completions_to_print,
+                    self._logs["target"],
                 )
 
             if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
@@ -1964,6 +1979,7 @@ class GRPOTrainer(Trainer):
                     "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
                     "prompt": self._logs["prompt"],
                     "completion": self._logs["completion"],
+                    "target": self._logs["target"],
                     **self._logs["rewards"],
                     "advantage": self._logs["advantages"],
                 }
