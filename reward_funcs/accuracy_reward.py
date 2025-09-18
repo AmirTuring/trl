@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from .base import BaseRewardFunction, _extract_boxed_answer, _select_for_index
 from math_verify import math_metric, LatexExtractionConfig, ExprExtractionConfig
-from ..prompts import LLM_JUDGE_PROMPT
+from prompts import LLM_JUDGE_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +129,7 @@ class AccuracyReward(BaseRewardFunction):
         
         # Optional LLM judge fallback
         self.llm_judge = llm_judge
+        self.__name__ = "AccuracyReward"
     
     def _evaluate_with_math_verify(self, completion_answer: str, ground_truth: str) -> float:
         """Evaluate using math_verify for mathematical equivalence."""

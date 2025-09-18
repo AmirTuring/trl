@@ -39,6 +39,7 @@ class FormatReward(BaseRewardFunction):
         self.sampling_rate = sampling_rate
         self.min_think_length = min_think_length
         self.max_ratio = max_ratio
+        self.__name__ = "FormatReward"
     
     def calculate_rewards(self, completions: List[str], **kwargs) -> List[float]:
         """

@@ -77,8 +77,14 @@ cp examples/accelerate_configs/deepspeed_zero2.yaml accelerate_config.yaml
 
 Execute the training command:
 
+#### For text models
 ```bash
 accelerate launch --config_file accelerate_config.yaml examples/scripts/grpo_math.py --config examples/cli_configs/grpo_math_config.yaml
+```
+
+#### For VLM models
+```bash
+accelerate launch --config_file accelerate_config.yaml examples/scripts/grpo_vlm_math.py --config examples/cli_configs/grpo_vlm_config.yaml
 ```
 
 ### Step 4: Monitor Training

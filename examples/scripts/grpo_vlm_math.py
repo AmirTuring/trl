@@ -57,7 +57,7 @@ from trl import (
 )
 from trl.trainer import IndexedGRPOTrainer
 # Import reward functions from the reward_funcs module
-from reward_funcs import format_reward_func, AccuracyReward, LLMJudgeConfig, FormatReward
+from reward_funcs import get_reward_func
 
 # Import system prompts
 from prompts import THINK_SYSTEM_PROMPT
@@ -354,14 +354,32 @@ def grpo_vlm_function(
         except Exception:
             return False
 
-    logger.info("Validating images...")
+    # Filter big images (from grpo_vlm.py)
+    def filter_big_images(example):
+        try:
+            image = example[image_field]
+            if isinstance(image, list):
+                image = image[0] if image else None
+            if image is None:
+                return False
+            return image.size[0] < 512 and image.size[1] < 512
+        except Exception:
+            return False
+
+    logger.info("Validating and filtering images...")
     train_dataset = train_dataset.filter(validate_image)
-    logger.info(f"Training dataset size after validation: {len(train_dataset)}")
+    logger.info(f"Training dataset size after image validation: {len(train_dataset)}")
+    
+    train_dataset = train_dataset.filter(filter_big_images)
+    logger.info(f"Training dataset size after filtering big images: {len(train_dataset)}")
 
     if eval_dataset is not None:
-        logger.info("Validating images in validation dataset...")
-        eval_dataset = eval_dataset.filter(lambda x: validate_image(x) )
-        logger.info(f"Validation dataset size after validation: {len(eval_dataset)}")
+        logger.info("Validating and filtering images in validation dataset...")
+        eval_dataset = eval_dataset.filter(lambda x: validate_image(x))
+        logger.info(f"Validation dataset size after image validation: {len(eval_dataset)}")
+        
+        eval_dataset = eval_dataset.filter(lambda x: filter_big_images(x))
+        logger.info(f"Validation dataset size after filtering big images: {len(eval_dataset)}")
 
     # Process datasets with optimal multiprocessing
     logger.info("Processing training dataset...")
@@ -406,24 +424,24 @@ def grpo_vlm_function(
     ################
     # Training
     ################
-    # Initialize reward functions with configuration
-    format_reward = FormatReward()
+    # Initialize reward functions
+    format_reward_func = get_reward_func("format")
+    
+    accuracy_config = {
+        'use_llm_judge': script_args.use_llm_judge,
+        'llm_judge_model_name': script_args.llm_judge_model_name,
+        'llm_judge_api_key_name': script_args.llm_judge_api_key_name,
+        'llm_judge_base_url': script_args.llm_judge_base_url,
+        'llm_judge_temperature': script_args.llm_judge_temperature
+    }
+    accuracy_reward_func = get_reward_func("accuracy", accuracy_config)
     
     if script_args.use_llm_judge:
-        # Create LLM judge configuration from script arguments
-        llm_judge_config = LLMJudgeConfig(
-            model_name=script_args.llm_judge_model_name,
-            api_key_name=script_args.llm_judge_api_key_name,
-            base_url=script_args.llm_judge_base_url,
-            temperature=script_args.llm_judge_temperature
-        )
-        accuracy_reward = AccuracyReward.with_llm_fallback(llm_judge_config)
-        logger.info("Using AccuracyReward with LLM judge fallback")
+        logger.info("Using accuracy_reward_func with LLM judge fallback")
     else:
-        accuracy_reward = AccuracyReward.with_math_verify_only()
-        logger.info("Using AccuracyReward with math_verify only (no LLM judge)")
+        logger.info("Using accuracy_reward_func with math_verify only")
     
-    reward_functions = [format_reward, accuracy_reward]
+    reward_functions = [format_reward_func, accuracy_reward_func]
     
     logger.info("Initializing trainer with pre-configured model...")
     
