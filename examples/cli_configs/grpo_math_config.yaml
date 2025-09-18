@@ -64,6 +64,8 @@ logging_steps: 10
 save_strategy: steps
 save_steps: 100
 save_total_limit: 2
+log_completions: true  # Log sample completions for debugging
+num_completions_to_print: 3  # Number of completions to show
 
 # Evaluation configuration (optional)
 # Only used if validation datasets are provided

@@ -218,13 +218,21 @@ def grpo_vlm_function(
     ################
     # Load processor for VLM
     ################
-    processor = AutoProcessor.from_pretrained(
-        (script_args.tokenizer_name_or_path if script_args.tokenizer_name_or_path else model_args.model_name_or_path),
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        use_fast=True,
-        padding_side="left"
-    )
+    # For VLM models, always use the model path for the processor to ensure compatibility with VLLM
+    try:
+        processor = AutoProcessor.from_pretrained(
+            model_args.model_name_or_path,
+            revision=model_args.model_revision,
+            trust_remote_code=model_args.trust_remote_code,
+            use_fast=True,
+            padding_side="left"
+        )
+        logger.info(f"Successfully loaded processor from {model_args.model_name_or_path}")
+    except Exception as e:
+        logger.error(f"Failed to load processor from {model_args.model_name_or_path}: {e}")
+        if training_args.use_vllm:
+            logger.error("This error often occurs with VLLM and multimodal models. Consider disabling VLLM by setting use_vllm: false")
+        raise
     
     # Also get tokenizer for compatibility
     tokenizer = processor.tokenizer if hasattr(processor, 'tokenizer') else processor

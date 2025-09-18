@@ -10,3 +10,4 @@ peft
 #flash-attn --no-build-isolation
 langchain_openai
 python-dotenv
+rich
