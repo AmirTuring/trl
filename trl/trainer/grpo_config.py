@@ -585,6 +585,10 @@ class GRPOConfig(TrainingArguments):
             "all prompts are logged."
         },
     )
+    project_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Project name for wandb logging. If not specified, defaults will be used."},
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
