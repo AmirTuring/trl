@@ -15,6 +15,13 @@ fi
 echo "Installing uv package manager..."
 pip install uv
 
+# Set up Python environment
+echo "Setting up Python environment..."
+uv venv
+echo "✓ Created Python virtual environment"
+. .venv/bin/activate
+uv pip install --upgrade setuptools wheel
+
 # Install requirements
 echo "Installing Python dependencies..."
 uv pip install -r requirements.txt
