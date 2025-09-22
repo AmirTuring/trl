@@ -4,6 +4,7 @@ IndexedGRPOTrainer - Enhanced GRPO Trainer with Pass@k Metrics and Detailed Logg
 This module provides an enhanced version of GRPOTrainer that adds:
 - Per-step reward logging with pass@k metrics
 - Detailed reward statistics tracking
+- Enhanced completion logging for offline analysis
 - Proper evaluation mode handling
 - WandB logging integration with HuggingFace-style cadence
 - Step boundary detection and metric accumulation
@@ -14,7 +15,13 @@ Features:
   - **Eval:** aggregated over the entire eval loop at each `eval_steps` point (single log per eval run).
 - Per-completion event logging (JSONL) updated **every step**
 - Per-step summaries with mean/std per prompt and pass@k
-- Separate folder per run: <output_dir>/reward_logs/<run_name>_<timestamp>/
+- **Enhanced completion logging**:
+  - Per-step completion storage in separate JSON files
+  - Accumulated WandB table that preserves history across steps
+  - Raw completion data saved for comprehensive offline analysis
+- Separate folders per run: 
+  - `<output_dir>/reward_logs/<train|eval>/` for reward statistics
+  - `<output_dir>/completion_logs/<train|eval>/` for completion data
 - Proper WandB metric naming: `train/pass_at_k/{k}` and `eval/pass_at_k/{k}`
 - **Only rank 0 reads/prints/logs** - no cross-rank reductions needed
 - **Pass@k computed from accumulated data** within steps
@@ -35,6 +42,15 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
+
+# Check for rich availability
+try:
+    from rich import is_rich_available, print_prompt_completions_sample
+except ImportError:
+    def is_rich_available():
+        return False
+    def print_prompt_completions_sample(*args, **kwargs):
+        pass
 
 from .grpo_trainer import GRPOTrainer
 
@@ -85,6 +101,10 @@ class IndexedGRPOTrainer(GRPOTrainer):
 
         # Accumulate detailed reward statistics per problem
         self._step_reward_details = defaultdict(dict)
+        
+        # Accumulate completion data per step
+        self._step_completion_details = []  # List of completion records for current step
+        self._accumulated_completion_table = []  # Accumulated table data across all steps
 
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         """Override to calculate rewards and compute pass@k metrics."""
@@ -126,6 +146,8 @@ class IndexedGRPOTrainer(GRPOTrainer):
         if self.accelerator.is_main_process:
             try:
                 self._accumulate_step_data(reward_kwargs, rewards_per_func, self.reward_func_names)
+                # Also accumulate completion data with lengths
+                self._accumulate_completion_data(prompts, completions, reward_kwargs, rewards_per_func)
             except Exception as e:
                 self.accelerator.print(f"Data accumulation failed: {e}")
 
@@ -180,6 +202,44 @@ class IndexedGRPOTrainer(GRPOTrainer):
 
         except Exception as e:
             self.accelerator.print(f"Data accumulation failed: {e}")
+
+    def _accumulate_completion_data(self, prompts, completions, reward_kwargs, rewards_per_func):
+        """Accumulate completion data and rewards for per-step logging."""
+        try:
+            logger.debug(f"_ACCUMULATE_COMPLETION_DATA: Called with eval_mode={self._is_evaluation_mode}, "
+                        f"prompts={len(prompts)}, completions={len(completions)}")
+
+            # Get reward data
+            reward_data = {}
+            for func_idx, func_name in enumerate(self.reward_func_names):
+                reward_data[func_name] = rewards_per_func[:, func_idx].cpu().tolist()
+
+            # Get problem IDs and other metadata
+            problem_ids = reward_kwargs.get("problem_id", [])
+            targets = reward_kwargs.get("target", [""] * len(prompts))
+
+            # Store completion records for this batch
+            for i, (prompt, completion) in enumerate(zip(prompts, completions)):
+                completion_record = {
+                    'step': self.state.global_step,
+                    'prompt': prompt,
+                    'completion': completion,
+                    'target': targets[i] if i < len(targets) else "",
+                    'problem_id': problem_ids[i] if i < len(problem_ids) else None,
+                    'is_evaluation': self._is_evaluation_mode,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                # Add rewards for each function
+                for func_name in self.reward_func_names:
+                    completion_record[f'reward_{func_name}'] = reward_data[func_name][i] if i < len(reward_data[func_name]) else 0.0
+
+                self._step_completion_details.append(completion_record)
+
+            logger.debug(f"_ACCUMULATE_COMPLETION_DATA: Accumulated {len(completions)} completion records")
+
+        except Exception as e:
+            logger.warning(f"Failed to accumulate completion data: {e}")
 
     def _calculate_pass_at_k_once_per_step(self):
         """Calculate pass@k metrics once per step using correct combinatorial formula."""
@@ -390,6 +450,13 @@ class IndexedGRPOTrainer(GRPOTrainer):
             except Exception as e:
                 self.accelerator.print(f"Detailed reward statistics save failed: {e}")
 
+            # Save detailed completion statistics
+            try:
+                if self._step_completion_details:
+                    self._save_completion_statistics(self.state.global_step, is_evaluation=False)
+            except Exception as e:
+                self.accelerator.print(f"Detailed completion statistics save failed: {e}")
+
         return result
 
     def evaluation_step(self, model, inputs, num_items_in_batch=None):
@@ -454,15 +521,23 @@ class IndexedGRPOTrainer(GRPOTrainer):
             except Exception as e:
                 logger.warning(f"Failed to save evaluation reward statistics: {e}")
 
+            # Save detailed completion statistics for evaluation
+            try:
+                if self._step_completion_details:
+                    self._save_completion_statistics(self.state.global_step, is_evaluation=True)
+            except Exception as e:
+                logger.warning(f"Failed to save evaluation completion statistics: {e}")
+
         # Reset window after logging and reset evaluation mode
         self._logging_window_passk_data.clear()
         self._is_evaluation_mode = False
 
         # Clear step data after evaluation to prepare for next training step
-        logger.info(f"EVALUATE METHOD: Clearing step data after evaluation - had {len(self._step_correct_answers)} answers")
+        logger.info(f"EVALUATE METHOD: Clearing step data after evaluation - had {len(self._step_correct_answers)} answers, {len(self._step_completion_details)} completion records")
         self._step_correct_answers.clear()
         self._step_problem_ids.clear()
         self._step_reward_details.clear()
+        self._step_completion_details.clear()
 
         return out
 
@@ -568,6 +643,132 @@ class IndexedGRPOTrainer(GRPOTrainer):
 
         except Exception as e:
             self.accelerator.print(f"Failed to save detailed reward statistics: {e}")
+
+    def _save_completion_statistics(self, step: int, is_evaluation: bool = False):
+        """Save detailed completion statistics and rewards for the current step."""
+        try:
+            if not self.accelerator.is_main_process or not self._step_completion_details:
+                return
+
+            # Create separate directories for train and eval
+            mode_dir = "eval" if is_evaluation else "train"
+            filename = f"completions_step_{step:06d}.json"
+            filepath = os.path.join(self.args.output_dir, "completion_logs", mode_dir, filename)
+
+            # Calculate reward statistics for each function
+            import numpy as np
+            reward_stats = {}
+            for func_name in self.reward_func_names:
+                reward_key = f'reward_{func_name}'
+                reward_values = [record[reward_key] for record in self._step_completion_details if reward_key in record]
+                if reward_values:
+                    reward_stats[f'{func_name}_mean'] = float(np.mean(reward_values))
+                    reward_stats[f'{func_name}_std'] = float(np.std(reward_values))
+                    reward_stats[f'{func_name}_min'] = float(np.min(reward_values))
+                    reward_stats[f'{func_name}_max'] = float(np.max(reward_values))
+
+            # Prepare data to save
+            completion_data = {
+                'step': step,
+                'timestamp': datetime.now().isoformat(),
+                'is_evaluation': is_evaluation,
+                'num_completions': len(self._step_completion_details),
+                'reward_statistics': reward_stats,
+                'completions': self._step_completion_details
+            }
+
+            # Save to file
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'w') as f:
+                json.dump(completion_data, f, indent=2)
+
+            logger.info(f"Saved completion data for {len(self._step_completion_details)} completions at step {step} to {filepath}")
+
+            # Clear step completion details after saving (only during training, keep during eval)
+            if not is_evaluation:
+                self._step_completion_details.clear()
+                logger.debug(f"Cleared completion details after training step {step}")
+            else:
+                logger.debug(f"Keeping completion details for evaluation at step {step}")
+
+        except Exception as e:
+            self.accelerator.print(f"Failed to save completion statistics: {e}")
+
+    def log(self, logs: dict[str, float], start_time = None) -> None:
+        """Override log method to add enhanced completion logging with per-step storage."""
+        # Call the parent log method first for normal logging behavior
+        mode = "train" if self.model.training else "eval"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if mode == "eval":
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs = {**logs, **metrics}
+        super(GRPOTrainer, self).log(logs, start_time)  # Call grandparent to skip GRPOTrainer.log
+        self._metrics[mode].clear()
+
+        # Enhanced completion logging (main process only)
+        if self.accelerator.is_main_process and self.log_completions:
+            try:
+                # Save detailed completion statistics per step
+                if self._step_completion_details:
+                    self._save_completion_statistics(self.state.global_step, is_evaluation=self._is_evaluation_mode)
+
+                # Rich console output (keep original behavior)
+                if hasattr(self, '_logs') and self._logs.get("prompt"):
+                    if is_rich_available():
+                        print_prompt_completions_sample(
+                            self._logs["prompt"],
+                            self._logs["completion"],
+                            self._logs["rewards"],
+                            self._logs["advantages"],
+                            self.state.global_step,
+                            self.num_completions_to_print,
+                            self._logs["target"],
+                        )
+
+                    # Enhanced WandB logging with accumulation
+                    if self.args.report_to and "wandb" in self.args.report_to and WANDB_AVAILABLE and wandb.run is not None:
+                        import pandas as pd
+
+                        # Create current step table data
+                        table_data = {
+                            "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                            "prompt": self._logs["prompt"],
+                            "completion": self._logs["completion"],
+                            "target": self._logs["target"],
+                            **self._logs["rewards"],
+                            "advantage": self._logs["advantages"],
+                        }
+
+
+                        if self._logs["image"]:
+                            table_data["image"] = []
+                            for img in self._logs["image"]:
+                                if img is not None:
+                                    # Convert images to wandb Image objects for proper visualization
+                                    table_data["image"].append(wandb.Image(img))
+                                else:
+                                    table_data["image"].append(None)
+
+                        # Add to accumulated table instead of overwriting
+                        current_data = list(zip(*[table_data[key] for key in table_data.keys()]))
+                        self._accumulated_completion_table.extend(current_data)
+
+                        # Create DataFrame from accumulated data
+                        df = pd.DataFrame(columns=list(table_data.keys()), data=self._accumulated_completion_table)
+                        if self.wandb_log_unique_prompts:
+                            df = df.drop_duplicates(subset=["prompt"])
+
+                        # Log accumulated table to WandB
+                        wandb.log({"completions": wandb.Table(dataframe=df)})
+
+                        logger.info(f"Logged {len(current_data)} new completions to WandB (total accumulated: {len(self._accumulated_completion_table)})")
+
+            except Exception as e:
+                self.accelerator.print(f"Enhanced completion logging failed: {e}")
 
     def _k_grid(self, num_generations: int):
         """Generate k values as powers of 2 until num_generations / 2."""
