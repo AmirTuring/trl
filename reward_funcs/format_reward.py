@@ -59,13 +59,6 @@ class FormatReward(BaseRewardFunction):
                 # Ensure consistency with prompt (prepend <think>)
                 completion = "<think>" + completion
                 
-                # Sample completions for debugging
-                if random.random() < self.sampling_rate:
-                    os.makedirs("completion_samples", exist_ok=True)
-                    with open("completion_samples/format_completion_samples.txt", "a") as f:
-                        f.write("\n\n==============\n")
-                        f.write(completion)
-                
                 # Check for think pattern
                 think_pattern = r"^<think>(.*?)</think>"
                 think_match = re.search(think_pattern, completion, re.DOTALL)
