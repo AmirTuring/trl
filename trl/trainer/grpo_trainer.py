@@ -1598,6 +1598,20 @@ class GRPOTrainer(Trainer):
             output["image_split_sizes"] = image_split_sizes
         return output
 
+    @property
+    def current_gradient_accumulation_steps(self) -> int:
+        """Return the effective gradient accumulation steps.
+
+        During training we divide the loss by the configured gradient accumulation
+        steps because the base Trainer's scaling is disabled for GRPO.
+        During evaluation we return 1.
+        """
+        try:
+            steps = int(getattr(self.args, "gradient_accumulation_steps", 1) or 1)
+        except Exception:
+            steps = 1
+        return steps if self.model.training else 1
+
     def compute_liger_loss(self, unwrapped_model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
