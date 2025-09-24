@@ -1598,19 +1598,23 @@ class GRPOTrainer(Trainer):
             output["image_split_sizes"] = image_split_sizes
         return output
 
-    @property
-    def current_gradient_accumulation_steps(self) -> int:
-        """Return the effective gradient accumulation steps.
+    def _get_effective_accumulation_steps(self) -> int:
+        """Return the effective accumulation factor for loss scaling.
 
-        During training we divide the loss by the configured gradient accumulation
-        steps because the base Trainer's scaling is disabled for GRPO.
-        During evaluation we return 1.
+        - During evaluation: return 1
+        - During training: prefer HF Trainer's dynamic attribute if present;
+          otherwise fall back to configured args.gradient_accumulation_steps.
         """
+        if not self.model.training:
+            return 1
+        # If Transformers Trainer set a dynamic value, prefer it
+        dynamic_steps = getattr(self, "current_gradient_accumulation_steps", None)
+        if isinstance(dynamic_steps, int) and dynamic_steps >= 1:
+            return dynamic_steps
         try:
-            steps = int(getattr(self.args, "gradient_accumulation_steps", 1) or 1)
+            return int(getattr(self.args, "gradient_accumulation_steps", 1) or 1)
         except Exception:
-            steps = 1
-        return steps if self.model.training else 1
+            return 1
 
     def compute_liger_loss(self, unwrapped_model, inputs):
         # Compute the per-token log probabilities for the model
@@ -1652,7 +1656,7 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        return loss / self.current_gradient_accumulation_steps
+        return loss / self._get_effective_accumulation_steps()
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1744,13 +1748,13 @@ class GRPOTrainer(Trainer):
 
         if self.loss_type == "grpo":
             loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-            loss = loss / self.current_gradient_accumulation_steps
+            loss = loss / self._get_effective_accumulation_steps()
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            loss = loss / self.current_gradient_accumulation_steps
+            loss = loss / self._get_effective_accumulation_steps()
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-            loss = loss / self.current_gradient_accumulation_steps
+            loss = loss / self._get_effective_accumulation_steps()
         elif self.loss_type == "dapo":
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * completion_mask).sum() / normalizer
