@@ -25,7 +25,7 @@ field_mapping:
 #  answer_field: answer
 
 # Model configuration - efficient model for MacBook testing
-model_name_or_path: Qwen/Qwen3-0.6B
+model_name_or_path: Qwen/Qwen3-0.6B-Base
 model_revision: main
 attn_implementation: eager  # Recommended for smaller models on MacBook
 torch_dtype: "bfloat16"
@@ -33,7 +33,7 @@ bf16: true
 
 # Training configuration - minimal resources optimized for MPS
 output_dir: runs/macbook-test-qwen-3-0.6b
-max_steps: 5  # Very short training for testing
+max_steps: 5
 per_device_train_batch_size: 2  # Minimal batch size
 #per_device_eval_batch_size: 2  # Small eval batch size
 gradient_accumulation_steps: 1  # Small accumulation
@@ -49,7 +49,7 @@ max_prompt_length: 512  # Shorter prompts
 max_completion_length: 1024  # Shorter completions
 temperature: 0.7
 num_generations: 2  # Fewer generations for faster testing
-reward_weights: [0.1, 0.5]  # Equal weights for format and accuracy
+reward_weights: [0.1, 1]  # Equal weights for format and accuracy
 
 # Disable VLLM for MacBook compatibility
 use_vllm: false
@@ -71,7 +71,7 @@ save_total_limit: 1
 # Script-specific arguments
 dataset_seed: 42
 
-# PEFT configuration - LoRA for Gemma-3
+# PEFT configuration - LoRA
 use_peft: true
 lora_r: 1
 lora_alpha: 2

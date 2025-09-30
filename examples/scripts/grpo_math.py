@@ -259,7 +259,7 @@ def grpo_function(
                 {"role": "assistant", "content": "<think>"},
             ]
 
-            prompt = tokenizer.apply_chat_template(conversation, tokenize=False, continue_final_message=True)
+            prompt = tokenizer.apply_chat_template(conversation, tokenize=False, continue_final_message=True, add_generation_prompt=False)
             return {"prompt": prompt, "target": answer}
         except Exception as e:
             logger.error(f"Error generating math prompt: {e}")
