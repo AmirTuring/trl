@@ -8,9 +8,9 @@ datasets:
 
 # Optional validation dataset configuration
 # If provided, will be used for evaluation during training
-validation_datasets:
-  - path: math-ai/amc23
-    split: test
+#validation_datasets:
+#  - path: math-ai/amc23
+#    split: test
 
 # Field mapping configuration
 # Maps dataset fields to expected question/answer format
@@ -20,27 +20,27 @@ field_mapping:
 
 # Optional validation field mapping configuration
 # If not provided, will use the same mapping as training dataset
-validation_field_mapping:
-  question_field: question
-  answer_field: answer
+#validation_field_mapping:
+#  question_field: question
+#  answer_field: answer
 
 # Model configuration - efficient model for MacBook testing
-model_name_or_path: Qwen/Qwen3-0.6B  # 270M parameters, optimized for instruction tuning
+model_name_or_path: Qwen/Qwen3-0.6B
 model_revision: main
 attn_implementation: eager  # Recommended for smaller models on MacBook
-torch_dtype: "float16"  # MPS supports float16 efficiently
-bf16: false  # Keep bf16 disabled for MPS compatibility
+torch_dtype: "bfloat16"
+bf16: true
 
 # Training configuration - minimal resources optimized for MPS
 output_dir: runs/macbook-test-qwen-3-0.6b
-max_steps: 50  # Very short training for testing
-per_device_train_batch_size: 1  # Minimal batch size
-per_device_eval_batch_size: 2  # Small eval batch size
-gradient_accumulation_steps: 2  # Small accumulation
+max_steps: 5  # Very short training for testing
+per_device_train_batch_size: 2  # Minimal batch size
+#per_device_eval_batch_size: 2  # Small eval batch size
+gradient_accumulation_steps: 1  # Small accumulation
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-learning_rate: 5.0e-5  # Slightly higher for faster convergence
+learning_rate: 1.0e-4  # Slightly higher for faster convergence
 
 # GRPO specific parameters - minimal settings
 beta: 0.001
@@ -49,7 +49,7 @@ max_prompt_length: 512  # Shorter prompts
 max_completion_length: 1024  # Shorter completions
 temperature: 0.7
 num_generations: 2  # Fewer generations for faster testing
-reward_weights: [0.5, 0.5]  # Equal weights for format and accuracy
+reward_weights: [0.1, 0.5]  # Equal weights for format and accuracy
 
 # Disable VLLM for MacBook compatibility
 use_vllm: false
@@ -64,8 +64,8 @@ save_total_limit: 1
 
 # Evaluation configuration (optional)
 # Only used if validation datasets are provided
-eval_strategy: steps
-eval_steps: 10
+#eval_strategy: steps
+#eval_steps: 10
 #eval_on_start: true
 
 # Script-specific arguments
