@@ -1,0 +1,65 @@
+# Reward Model Full Training Configuration Example
+# This configuration demonstrates full fine-tuning (without LoRA) for reward models
+
+# Model configuration
+model_name_or_path: "Qwen/Qwen2.5-0.5B-Instruct"
+trust_remote_code: true
+
+# Reward model configuration
+num_labels: 1  # Single scalar reward score (default). Access via: model(**inputs).logits[0][0]
+
+# Dataset configuration
+datasets:
+  - path: "trl-lib/ultrafeedback_binarized"
+    split: "train"
+
+# Validation dataset
+#datasets:
+#  - path: "trl-lib/ultrafeedback_binarized"
+#    split: "test"
+    
+# Training arguments for full fine-tuning
+learning_rate: 1.0e-5  # Lower learning rate for full training
+num_train_epochs: 1
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+max_length: 2048
+
+# Reward-specific settings
+center_rewards_coefficient: 0.01
+disable_dropout: true
+
+# Evaluation
+eval_strategy: "steps"
+eval_steps: 50
+per_device_eval_batch_size: 8
+
+# Logging and tracking  
+logging_steps: 10
+output_dir: "runs/qwen2.5-0.5b-reward-full"
+run_name: "reward-qwen2.5-0.5b-full"
+project_name: "reward-model-training"
+report_to: ["wandb"]
+
+# NO LoRA for full training
+use_peft: false
+
+# Saving and pushing
+save_strategy: "steps"
+save_steps: 100
+save_total_limit: 2
+push_to_hub: false
+
+# Field mapping
+field_mapping:
+  prompt_field: "prompt"
+  chosen_field: "chosen"
+  rejected_field: "rejected"
+
+# Advanced options
+bf16: true  # Use bfloat16 for faster training
+dataloader_pin_memory: true
+dataloader_num_workers: 4
+remove_unused_columns: false
+dataset_num_proc: 4
