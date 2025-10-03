@@ -44,6 +44,7 @@ per_device_eval_batch_size: 2
 logging_steps: 1
 logging_strategy: steps
 logging_first_step: true
+log_completions: true  # Log completions for debugging and monitoring
 output_dir: "runs/qwen2.5-0.5b-reward-lora-v2"
 run_name: "reward-qwen2.5-0.5b-lora-v2"
 project_name: "reward-model-training" 
