@@ -45,6 +45,12 @@ class RewardConfig(TrainingArguments):
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if the
             dataset is pretokenized.
+        log_completions (`bool`, *optional*, defaults to `False`):
+            Whether to log completions (chosen/rejected texts and rewards) to experiment trackers like WandB during
+            evaluation. Useful for debugging and monitoring model predictions.
+        num_completions_to_print (`int`, *optional*, defaults to `4`):
+            Number of completions to display in the console during evaluation. All completions will still be logged
+            to WandB/Comet if log_completions is True. Set to -1 to print all.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -97,6 +103,20 @@ class RewardConfig(TrainingArguments):
         metadata={
             "help": "Whether to remove the columns that are not used by the model's forward pass. Can be `True` only "
             "if the dataset is pretokenized."
+        },
+    )
+    log_completions: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to log completions (chosen/rejected texts and rewards) to experiment trackers like WandB "
+            "during evaluation. Useful for debugging and monitoring model predictions."
+        },
+    )
+    num_completions_to_print: int = field(
+        default=4,
+        metadata={
+            "help": "Number of completions to display in the console during evaluation. All completions will still be "
+            "logged to WandB/Comet if log_completions is True. Set to -1 to print all."
         },
     )
 
