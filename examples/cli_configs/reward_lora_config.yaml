@@ -13,12 +13,12 @@ num_labels: 1  # Single scalar reward score (default). Access via: model(**input
 # Option 2: prompt, chosen, rejected
 datasets:
   - path: "trl-lib/ultrafeedback_binarized"
-    split: "train[:3%]"
+    split: "train[:2%]"
 
 # Optional validation dataset configuration
-#validation_datasets:
-#  - path: "trl-lib/ultrafeedback_binarized"
-#    split: "test[:5%]"
+validation_datasets:
+  - path: "trl-lib/ultrafeedback_binarized"
+    split: "test[:5%]"
     
 # Training arguments optimized for reward model training
 learning_rate: 1.0e-4  # Higher learning rate for LoRA
@@ -26,6 +26,8 @@ num_train_epochs: 1
 per_device_train_batch_size: 2
 gradient_accumulation_steps: 8
 gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
 max_length: 2048  # Maximum sequence length for reward model
 
 # Reward-specific settings
@@ -33,14 +35,17 @@ max_length: 2048  # Maximum sequence length for reward model
 disable_dropout: true  # Disable dropout for reward model stability
 
 # Evaluation
-#eval_strategy: "steps"
-#eval_steps: 50
-#per_device_eval_batch_size: 4
+eval_strategy: "steps"
+eval_steps: 20
+eval_on_start: true  # Evaluate before training starts
+per_device_eval_batch_size: 2
 
 # Logging and tracking  
 logging_steps: 1
-output_dir: "runs/qwen2.5-0.5b-reward-lora"
-run_name: "reward-qwen2.5-0.5b-lora"
+logging_strategy: steps
+logging_first_step: true
+output_dir: "runs/qwen2.5-0.5b-reward-lora-v2"
+run_name: "reward-qwen2.5-0.5b-lora-v2"
 project_name: "reward-model-training" 
 report_to: ["wandb"]
 
@@ -73,16 +78,14 @@ push_to_hub: true
 
 # Field mapping - Option 2: Using direct chosen/rejected format (recommended)
 field_mapping:
-#  prompt_field: "prompt"
   chosen_field: "chosen"
   rejected_field: "rejected"
 
 # Optional validation field mapping
 # If not provided, will use the same mapping as training dataset
-#validation_field_mapping:
-#  prompt_field: "prompt"
-#  chosen_field: "chosen"
-#  rejected_field: "rejected"
+validation_field_mapping:
+  chosen_field: "chosen"
+  rejected_field: "rejected"
 
 # Advanced options
 dataloader_pin_memory: false
@@ -90,3 +93,5 @@ dataloader_num_workers: 2
 remove_unused_columns: false
 dataset_num_proc: 4
 
+
+dataset_seed: 42
