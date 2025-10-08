@@ -187,6 +187,9 @@ class RewardTrainer(Trainer):
         # "warnings_issued" dictionary to True. This acts as a flag to indicate that the warning has already been
         # issued.
         model.warnings_issued["estimate_tokens"] = True
+        
+        # Initialize storage for completion logging during evaluation
+        self._eval_completions_cache = defaultdict(list)
 
         if "input_ids_chosen" not in train_dataset.column_names:
             with PartialState().main_process_first():
@@ -304,74 +307,81 @@ class RewardTrainer(Trainer):
 
         labels = torch.zeros(logits.shape[0])
         labels = self._prepare_inputs(labels)
+        
+        # Cache completions during evaluation if log_completions is enabled
+        if self.args.log_completions and not model.training:
+            num_samples = len(self._eval_completions_cache["chosen_text"])
+            max_samples = self.args.num_completions_to_print if self.args.num_completions_to_print > 0 else float('inf')
+            
+            if num_samples < max_samples:
+                rewards_chosen = logits_dict["rewards_chosen"]
+                rewards_rejected = logits_dict["rewards_rejected"]
+                
+                chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.processing_class)
+                rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.processing_class)
+                
+                rewards_chosen_list = rewards_chosen.cpu().squeeze().tolist()
+                rewards_rejected_list = rewards_rejected.cpu().squeeze().tolist()
+                
+                # Handle both single values and lists
+                if not isinstance(rewards_chosen_list, list):
+                    rewards_chosen_list = [rewards_chosen_list]
+                    rewards_rejected_list = [rewards_rejected_list]
+                
+                correct = [1 if c >= r else 0 for c, r in zip(rewards_chosen_list, rewards_rejected_list)]
+                
+                self._eval_completions_cache["chosen_text"].extend(chosen_text)
+                self._eval_completions_cache["rejected_text"].extend(rejected_text)
+                self._eval_completions_cache["reward_chosen"].extend([round(r, 4) for r in rewards_chosen_list])
+                self._eval_completions_cache["reward_rejected"].extend([round(r, 4) for r in rewards_rejected_list])
+                self._eval_completions_cache["correct"].extend(correct)
 
         return loss, logits, labels
 
     def evaluate(self, *args, **kwargs):
         num_print_samples = kwargs.pop("num_print_samples", -1)
+        
+        # Clear cache before evaluation
         if self.args.log_completions:
-            # Log all samples when log_completions is enabled
-            self.visualize_samples(-1)
-        return super().evaluate(*args, **kwargs)
-
-    def visualize_samples(self, num_print_samples: int):
-        """
-        Visualize the reward model logits prediction
-
-        Args:
-            num_print_samples (`int`, defaults to `4`):
-                The number of samples to print. Set to `-1` to print all samples.
-        """
-        eval_dataloader = self.get_eval_dataloader()
-        table = defaultdict(list)
-        for _, inputs in enumerate(eval_dataloader):
-            inputs = self._prepare_inputs(inputs)
-            with torch.no_grad():
-                _, logits_dict = self.compute_loss(self.model, inputs, return_outputs=True)
-                rewards_chosen = logits_dict["rewards_chosen"]
-                rewards_rejected = logits_dict["rewards_rejected"]
-            
-            chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.processing_class)
-            rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.processing_class)
-            
-            # Calculate if the model prediction is correct (reward_chosen > reward_rejected)
-            rewards_chosen_list = rewards_chosen.cpu().squeeze().tolist()
-            rewards_rejected_list = rewards_rejected.cpu().squeeze().tolist()
-            
-            # Handle both single values and lists
-            if not isinstance(rewards_chosen_list, list):
-                rewards_chosen_list = [rewards_chosen_list]
-                rewards_rejected_list = [rewards_rejected_list]
-            
-            correct = [1 if c >= r else 0 for c, r in zip(rewards_chosen_list, rewards_rejected_list)]
-            
-            table["chosen_text"].extend(gather_object(chosen_text))
-            table["rejected_text"].extend(gather_object(rejected_text))
-            table["reward_chosen"].extend(gather_object([round(r, 4) for r in rewards_chosen_list]))
-            table["reward_rejected"].extend(gather_object([round(r, 4) for r in rewards_rejected_list]))
-            table["correct"].extend(gather_object(correct))
-            
-            if num_print_samples >= 0 and len(table["chosen_text"]) >= num_print_samples:
-                break
-        df = pd.DataFrame(table)
+            self._eval_completions_cache.clear()
+        
+        # Run evaluation - completions are cached during prediction_step
+        eval_results = super().evaluate(*args, **kwargs)
+        
+        # After evaluation completes, display cached completions if enabled
+        if self.args.log_completions:
+            self._display_cached_completions()
+        
+        return eval_results
+    
+    def _display_cached_completions(self):
+        """Display completions that were cached during evaluation."""
+        if not self._eval_completions_cache or len(self._eval_completions_cache["chosen_text"]) == 0:
+            return
+        
+        # Gather cached data from all processes
+        gathered_cache = {
+            key: gather_object(values) 
+            for key, values in self._eval_completions_cache.items()
+        }
+        
         if self.accelerator.process_index == 0:
+            df = pd.DataFrame(gathered_cache)
+            
             if is_rich_available():
-                # For console display, use num_completions_to_print setting
-                display_samples = self.args.num_completions_to_print if num_print_samples == -1 else num_print_samples
-                if display_samples == -1:
+                # Display samples in console
+                display_samples = self.args.num_completions_to_print
+                if display_samples == -1 or display_samples >= len(df):
                     print_rich_table(df)
                 else:
                     print_rich_table(df[:display_samples])
             
             if "wandb" in self.args.report_to:
                 import wandb
-
                 if wandb.run is not None:
-                    # Log all samples to wandb
                     wandb.log({"completions": wandb.Table(dataframe=df)})
-
+            
             if "comet_ml" in self.args.report_to:
-                # Log all samples to comet
                 log_table_to_comet_experiment(
                     name="completions.csv",
                     table=df,
