@@ -1,5 +1,5 @@
 """
-GRPO Training for Mathematical Reasoning (with per-step reward logging)
+GRPO Training for Mathematical Reasoning (with per-step reward logging and cipher experiment)
 
 This script trains language models using GRPO (Group Relative Policy Optimization)
 on mathematical reasoning tasks. The training teaches models to solve math problems
@@ -7,6 +7,12 @@ with step-by-step reasoning in a structured format:
 
 - <think>step-by-step reasoning</think>
 - \\boxed{final answer}
+
+Cipher Experiment:
+- Input prompts (questions and instructions) are ciphered using a permutation mapping
+- Original alphabet: abcdefghijklmnopqrstuvwxyz -> udaihveyrcnxobslwpkfgtzjmq
+- Model receives ciphered text and generates ciphered responses
+- Model outputs are deciphered before reward evaluation
 
 Reward functions:
 1. Format reward: Ensures proper <think></think> and exactly one \\boxed{...}
@@ -109,6 +115,28 @@ class ScriptArguments(TrlScriptArguments):
     llm_judge_temperature: float = field(default=0.0, metadata={"help": "Temperature for LLM judge generation"})
 
 
+
+########################
+# Cipher/Decipher Utilities
+########################
+
+# Cipher permutation mapping
+ORIGINAL_LOWER = "abcdefghijklmnopqrstuvwxyz"
+CIPHER_LOWER = "udaihveyrcnxobslwpkfgtzjmq"
+ORIGINAL_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+CIPHER_UPPER = "UDAIHVEYRCNXOBSLWPKFGTZJMQ"
+
+# Create translation tables
+CIPHER_TABLE = str.maketrans(ORIGINAL_LOWER + ORIGINAL_UPPER, CIPHER_LOWER + CIPHER_UPPER)
+DECIPHER_TABLE = str.maketrans(CIPHER_LOWER + CIPHER_UPPER, ORIGINAL_LOWER + ORIGINAL_UPPER)
+
+def cipher_text(text: str) -> str:
+    """Apply cipher permutation to text."""
+    return text.translate(CIPHER_TABLE)
+
+def decipher_text(text: str) -> str:
+    """Reverse cipher permutation to get original text."""
+    return text.translate(DECIPHER_TABLE)
 
 ########################
 # Utilities
@@ -245,26 +273,40 @@ def grpo_function(
 
     # Generate prompt for mathematical reasoning
     def generate_math_prompt(question, answer):
-        """Generate prompt with step-by-step thinking format."""
+        """Generate prompt with step-by-step thinking format. Applies cipher to question."""
         try:
+            # Cipher the question
+            ciphered_question = cipher_text(question)
+            
+            # Cipher the system prompt
+            ciphered_system_prompt = cipher_text(THINK_SYSTEM_PROMPT)
+            
+            # Cipher the instruction text
+            instruction = "Think step-by-step inside <think>...</think> tags, then give your final answer inside \\boxed{{}}."
+            ciphered_instruction = cipher_text(instruction)
+            
             conversation = [
                 {
                     "role": "system",
-                    "content": THINK_SYSTEM_PROMPT,
+                    "content": ciphered_system_prompt,
                 },
                 {
                     "role": "user",
-                    "content": f"{question}\n\nThink step-by-step inside <think>...</think> tags, then give your final answer inside \\boxed{{}}.",
+                    "content": f"{ciphered_question}\n\n{ciphered_instruction}",
                 },
-                {"role": "assistant", "content": "<think>"},
+#                {"role": "assistant", "content": "<think>"},
             ]
 
-            prompt = tokenizer.apply_chat_template(conversation, tokenize=False, continue_final_message=True, add_generation_prompt=False)
+            prompt = tokenizer.apply_chat_template(conversation, tokenize=False, continue_final_message=False, add_generation_prompt=True)
             return {"prompt": prompt, "target": answer}
         except Exception as e:
             logger.error(f"Error generating math prompt: {e}")
             # Fallback to simple format
-            return {"prompt": f"Solve: {question}\nThink step by step.\n<think>", "target": answer}
+            ciphered_solve = cipher_text("Solve:")
+            ciphered_question = cipher_text(question)
+            ciphered_instruction = cipher_text("Think step by step.")
+            ciphered_think = cipher_text("<think>")
+            return {"prompt": f"{ciphered_solve} {ciphered_question}\n{ciphered_instruction}\n{ciphered_think}", "target": answer}
 
     # Get field mapping configuration for training
     train_question_field = script_args.field_mapping.get("question_field")
@@ -346,7 +388,23 @@ def grpo_function(
     else:
         logger.info("Using accuracy_reward_func with math_verify only")
     
-    reward_functions = [format_reward_func, accuracy_reward_func]
+    # Create wrapper reward functions that decipher model output before evaluation
+    def deciphering_reward_wrapper(reward_func):
+        """Wrapper that deciphers model output before passing to reward function."""
+        def wrapped_reward(prompt, completion, target, **kwargs):
+            # Decipher the completion before evaluation
+            deciphered_completion = decipher_text(completion)
+            # Call original reward function with deciphered text
+            return reward_func(prompt, deciphered_completion, target, **kwargs)
+        return wrapped_reward
+    
+    # Wrap reward functions with deciphering
+    format_reward_func_deciphered = deciphering_reward_wrapper(format_reward_func)
+    accuracy_reward_func_deciphered = deciphering_reward_wrapper(accuracy_reward_func)
+    
+    reward_functions = [format_reward_func_deciphered, accuracy_reward_func_deciphered]
+    
+    logger.info("Cipher experiment enabled: prompts will be ciphered, outputs will be deciphered for reward evaluation")
     trainer = IndexedGRPOTrainer(
         model=model_args.model_name_or_path,
         reward_funcs=reward_functions,
