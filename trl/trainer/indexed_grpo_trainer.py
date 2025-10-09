@@ -66,9 +66,10 @@ class IndexedGRPOTrainer(GRPOTrainer):
     reward statistics per problem, and proper evaluation/training mode handling.
     """
     
-    def __init__(self, *args, tokenizer=None, **kwargs):
+    def __init__(self, *args, tokenizer=None, decipher_func=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._tokenizer = tokenizer
+        self._decipher_func = decipher_func  # Optional decipher function for logging
         self._is_evaluation_mode = False  # Track evaluation mode
         self._last_global_step = -1  # Track step boundaries
 
@@ -229,6 +230,44 @@ class IndexedGRPOTrainer(GRPOTrainer):
                     'is_evaluation': self._is_evaluation_mode,
                     'timestamp': datetime.now().isoformat()
                 }
+                
+                # Add deciphered completion if decipher function is available
+                if self._decipher_func is not None:
+                    try:
+                        # Helper function to preserve special tokens while deciphering content
+                        import re
+                        
+                        def decipher_preserving_tokens(text):
+                            # Pattern to match special tokens like <|...|>, <...>, and common template keywords
+                            # We'll protect: <|token|>, <token>, and whole words that are chat template keywords
+                            special_tokens = []
+                            
+                            # Find and replace special tokens with placeholders
+                            # Match patterns like <|im_start|>, <|im_end|>, <think>, </think>, etc.
+                            pattern = r'(<\|[^|]+\|>|</?[a-z_]+>)'
+                            
+                            def save_token(match):
+                                token = match.group(0)
+                                idx = len(special_tokens)
+                                special_tokens.append(token)
+                                return f"__SPECIAL_TOKEN_{idx}__"
+                            
+                            # Replace special tokens with placeholders
+                            protected_text = re.sub(pattern, save_token, text)
+                            
+                            # Decipher the text (with special tokens protected)
+                            deciphered = self._decipher_func(protected_text)
+                            
+                            # Restore special tokens
+                            for idx, token in enumerate(special_tokens):
+                                deciphered = deciphered.replace(f"__SPECIAL_TOKEN_{idx}__", token)
+                            
+                            return deciphered
+                        
+                        completion_record['completion_deciphered'] = decipher_preserving_tokens(completion)
+                        completion_record['prompt_deciphered'] = decipher_preserving_tokens(prompt)
+                    except Exception as e:
+                        logger.warning(f"Failed to decipher completion: {e}")
                 
                 # Add rewards for each function
                 for func_name in self.reward_func_names:

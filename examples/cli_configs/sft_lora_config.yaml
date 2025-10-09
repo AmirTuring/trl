@@ -2,48 +2,48 @@
 # This configuration demonstrates LoRA fine-tuning with the enhanced SFT script
 
 # Model configuration
-model_name_or_path: "Qwen/Qwen2.5-0.5B-Instruct"
+model_name_or_path: "Qwen/Qwen2.5-3B-Instruct"
 trust_remote_code: true
 
 # Dataset configuration
 datasets:
-  - path: "AmirMohseni/cipher-gsm8k" 
-    split: "train[:40%]"
+  - path: "AmirMohseni/gsm8k-cipher-sft" 
+    split: "train"
 
 # Optional validation dataset configuration
 # If provided, will be used for evaluation during training
-validation_datasets:
-  - path: "AmirMohseni/cipher-gsm8k"
-    split: "test[:10%]"
+#validation_datasets:
+#  - path: "AmirMohseni/cipher-gsm8k"
+#    split: "test"
     
 # Training arguments optimized for LoRA
 learning_rate: 1.0e-4  # Higher learning rate for LoRA
 lr_scheduler_type: "constant"
 num_train_epochs: 1
-per_device_train_batch_size: 1
-gradient_accumulation_steps: 8
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 2
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 max_length: 1024
 
 # Evaluation
-eval_strategy: "steps"
-eval_steps: 50
-eval_on_start: true
-per_device_eval_batch_size: 2
+#eval_strategy: "steps"
+#eval_steps: 50
+#eval_on_start: true
+#per_device_eval_batch_size: 2
 
 # Logging and tracking  
 logging_steps: 1
-output_dir: "runs/qwen2.5-0.5b-gsm8k-cipher-lora-sft-v2"
-run_name: "sft-qwen2.5-0.5b-gsm8k-cipher-lora-v2"
+output_dir: "runs/qwen2.5-3b-gsm8k-cipher-lora-sft"
+run_name: "sft-qwen2.5-3b-gsm8k-cipher-lora"
 project_name: "cipher-sft-training" 
 report_to: ["wandb"]
 
 # LoRA configuration
 use_peft: true
-lora_r: 6
-lora_alpha: 12
+lora_r: 4
+lora_alpha: 8
 lora_dropout: 0.01
 lora_target_modules: "all-linear"
 
@@ -64,9 +64,9 @@ field_mapping:
 
 # Optional validation field mapping configuration
 # If not provided, will use the same mapping as training dataset
-validation_field_mapping:
-  question_field: "question"
-  completion_field: "answer"
+#validation_field_mapping:
+#  question_field: "question"
+#  completion_field: "answer"
 
 
 # Advanced options

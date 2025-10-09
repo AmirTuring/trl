@@ -273,7 +273,7 @@ def grpo_function(
 
     # Generate prompt for mathematical reasoning
     def generate_math_prompt(question, answer):
-        """Generate prompt with step-by-step thinking format. Applies cipher to question."""
+        """Generate prompt with step-by-step thinking format. Ciphers content while chat template preserves special tokens."""
         try:
             # Cipher the question
             ciphered_question = cipher_text(question)
@@ -301,12 +301,10 @@ def grpo_function(
             return {"prompt": prompt, "target": answer}
         except Exception as e:
             logger.error(f"Error generating math prompt: {e}")
-            # Fallback to simple format
-            ciphered_solve = cipher_text("Solve:")
+            # Fallback to simple format (cipher only the question)
             ciphered_question = cipher_text(question)
-            ciphered_instruction = cipher_text("Think step by step.")
-            ciphered_think = cipher_text("<think>")
-            return {"prompt": f"{ciphered_solve} {ciphered_question}\n{ciphered_instruction}\n{ciphered_think}", "target": answer}
+            instruction = "Think step by step."
+            return {"prompt": f"Solve: {ciphered_question}\n{instruction}\n<think>", "target": answer}
 
     # Get field mapping configuration for training
     train_question_field = script_args.field_mapping.get("question_field")
@@ -391,11 +389,13 @@ def grpo_function(
     # Create wrapper reward functions that decipher model output before evaluation
     def deciphering_reward_wrapper(reward_func):
         """Wrapper that deciphers model output before passing to reward function."""
-        def wrapped_reward(prompt, completion, target, **kwargs):
-            # Decipher the completion before evaluation
-            deciphered_completion = decipher_text(completion)
+        def wrapped_reward(prompts, completions, target, **kwargs):
+            # Decipher the completions before evaluation
+            deciphered_completions = [decipher_text(completion) for completion in completions]
             # Call original reward function with deciphered text
-            return reward_func(prompt, deciphered_completion, target, **kwargs)
+            return reward_func(completions=deciphered_completions, target=target, **kwargs)
+        # Preserve the original function name for the trainer
+        wrapped_reward.__name__ = reward_func.__name__
         return wrapped_reward
     
     # Wrap reward functions with deciphering
@@ -404,7 +404,7 @@ def grpo_function(
     
     reward_functions = [format_reward_func_deciphered, accuracy_reward_func_deciphered]
     
-    logger.info("Cipher experiment enabled: prompts will be ciphered, outputs will be deciphered for reward evaluation")
+    logger.info("Cipher experiment enabled: content (system/question/instructions) is ciphered, special tokens preserved, model outputs deciphered for reward evaluation")
     trainer = IndexedGRPOTrainer(
         model=model_args.model_name_or_path,
         reward_funcs=reward_functions,
@@ -413,6 +413,7 @@ def grpo_function(
         eval_dataset=eval_dataset if training_args.eval_strategy != "no" else None,
         peft_config=get_peft_config(model_args),
         tokenizer=tokenizer,
+        decipher_func=decipher_text,  # Pass decipher function for logging deciphered completions
     )
 
     last_checkpoint = get_checkpoint(training_args)
