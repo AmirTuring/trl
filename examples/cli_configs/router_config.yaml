@@ -1,0 +1,80 @@
+# Router Training Configuration
+# Train a sequence classification model to route prompts to different systems
+
+# Model configuration
+model_name_or_path: "Qwen/Qwen3-0.6B"
+trust_remote_code: true
+#attn_implementation: "flash_attention_2"
+
+# Dataset configuration
+datasets:
+  - path: "AmirMohseni/reasoning-router-data-v2"
+    split: "train"
+
+# Optional validation dataset configuration
+validation_datasets:
+  - path: "AmirMohseni/reasoning-router-data-v2"
+    split: "validation"
+
+# Label Mapping - Define your classification labels
+label_mapping:
+  no_think: 0
+  think: 1
+
+# Training arguments optimized for LoRA
+learning_rate: 1.0e-4  # Higher learning rate for LoRA
+num_train_epochs: 2
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+max_length: 2048
+
+# Evaluation
+eval_strategy: "steps"
+eval_steps: 100
+per_device_eval_batch_size: 16
+load_best_model_at_end: true
+metric_for_best_model: "f1"
+
+# Logging and tracking
+logging_steps: 5
+output_dir: "runs/router-qwen3-0.6b-lora"
+run_name: "router-qwen2.5-0.6b-lora"
+project_name: "web-router-training"
+report_to: ["wandb"]
+
+# LoRA configuration
+use_peft: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.01
+lora_target_modules: "all-linear"
+lora_task_type: "SEQ_CLS"
+
+# Quantization for memory efficiency
+#load_in_8bit: false
+#load_in_4bit: true
+
+# Saving and pushing
+save_strategy: "steps"
+save_steps: 100
+save_total_limit: 3
+push_to_hub: true
+
+# Field mapping - specify prompt and label fields in your dataset
+field_mapping:
+  prompt_field: "prompt"
+  label_field: "label"
+
+# Optional validation field mapping configuration
+# If not provided, will use the same mapping as training dataset
+validation_field_mapping:
+  prompt_field: "prompt"
+  label_field: "label"
+
+# Advanced options
+dataloader_pin_memory: false
+dataloader_num_workers: 1
+remove_unused_columns: false
