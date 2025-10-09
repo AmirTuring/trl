@@ -2,7 +2,7 @@
 # Train a sequence classification model to route prompts to different systems
 
 # Model configuration
-model_name_or_path: "Qwen/Qwen3-0.6B"
+model_name_or_path: "Qwen/Qwen3-1.7B"
 trust_remote_code: true
 #attn_implementation: "flash_attention_2"
 
@@ -23,9 +23,11 @@ label_mapping:
 
 # Training arguments optimized for LoRA
 learning_rate: 1.0e-4  # Higher learning rate for LoRA
-num_train_epochs: 2
-per_device_train_batch_size: 1
-gradient_accumulation_steps: 16
+lr_scheduler_type: cosine
+#warmup_ratio: 0.03
+num_train_epochs: 1
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
@@ -40,14 +42,14 @@ metric_for_best_model: "f1"
 
 # Logging and tracking
 logging_steps: 5
-output_dir: "runs/router-qwen3-0.6b-lora"
-run_name: "router-qwen2.5-0.6b-lora"
+output_dir: "runs/router-qwen3-1.7b-lora"
+run_name: "router-qwen3-1.7b-lora"
 project_name: "web-router-training"
 report_to: ["wandb"]
 
 # LoRA configuration
 use_peft: true
-lora_r: 16
+lora_r: 256
 lora_alpha: 32
 lora_dropout: 0.01
 lora_target_modules: "all-linear"

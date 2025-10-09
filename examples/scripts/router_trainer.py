@@ -162,6 +162,7 @@ def router_function(model_args: ModelConfig, script_args: ScriptArguments, train
         num_labels=num_labels,
         id2label=id2label,
         label2id=label2id,
+        use_cache=False,
     )
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
