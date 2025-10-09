@@ -10,3 +10,4 @@ peft
 langchain_openai
 python-dotenv
 rich
+scikit-learn>=1.5.0
