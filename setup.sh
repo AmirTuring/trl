@@ -19,7 +19,16 @@ pip install uv
 echo "Setting up Python environment..."
 uv venv
 echo "✓ Created Python virtual environment"
-. .venv/bin/activate
+
+# Detect correct path (bin or Scripts based on OS)
+if [ -d "venv/bin" ]; then
+    ACTIVATE_PATH=".venv/bin/activate"
+else
+    ACTIVATE_PATH=".venv/Scripts/activate"
+fi
+. $ACTIVATE_PATH
+echo "Using activation script: $ACTIVATE_PATH"
+
 uv pip install --upgrade setuptools wheel
 
 # Install requirements
