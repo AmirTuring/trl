@@ -55,6 +55,7 @@ from tqdm import tqdm
 import sys
 from pathlib import Path
 import os
+from dotenv import load_dotenv # Added for .env support
 
 # Add parent directory to path to import trl
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -340,6 +341,10 @@ def print_summary(results):
 
 
 def main():
+    # Load environment variables from .env file
+    load_dotenv()
+    hf_token = os.environ.get("HF_TOKEN") # Retrieve HF_TOKEN from environment variables
+    
     # Simple argument parser without TrlParser to avoid unnecessary arguments
     parser = argparse.ArgumentParser(description="Compare base and fine-tuned reward models")
     parser.add_argument("--config", type=str, required=True, help="Path to training config file")
