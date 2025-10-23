@@ -35,4 +35,7 @@ else
     echo "⚠ CUDA not detected. Skipping flash-attention installation."
 fi
 
+# Make auto-shutdown script executable
+chmod +x auto_shutdown.sh
+
 echo "✓ Setup complete! Please configure your .env file with API keys before running training."
