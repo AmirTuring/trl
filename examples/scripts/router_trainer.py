@@ -154,16 +154,28 @@ def router_function(model_args: ModelConfig, script_args: ScriptArguments, train
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Load config first to check if model supports use_cache
+    config = AutoConfig.from_pretrained(
+        model_args.model_name_or_path,
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        num_labels=num_labels,
+        id2label=id2label,
+        label2id=label2id,
+    )
+    
     model_kwargs = dict(
+        config=config,
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
-        num_labels=num_labels,
-        id2label=id2label,
-        label2id=label2id,
-        use_cache=False,
     )
+    
+    # Only add use_cache if the model config supports it
+    if hasattr(config, 'use_cache'):
+        model_kwargs["use_cache"] = False
+    
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         model_kwargs["device_map"] = get_kbit_device_map()
@@ -334,7 +346,7 @@ def router_function(model_args: ModelConfig, script_args: ScriptArguments, train
         trainer.create_model_card({"tags": ["router", "sequence-classification", "text-classification"]})
 
     if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name=script_args.dataset_name, commit_message=f"Router checkpoint - Step {trainer.state.global_step}")
+        trainer.push_to_hub(commit_message=f"Router checkpoint - Step {trainer.state.global_step}")
         logger.info(f"🤗 Model pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
 
     if trainer.accelerator.is_main_process and wandb.run:
