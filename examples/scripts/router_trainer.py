@@ -172,10 +172,6 @@ def router_function(model_args: ModelConfig, script_args: ScriptArguments, train
         dtype=model_args.dtype,
     )
     
-    # Only add use_cache if the model config supports it
-    if hasattr(config, 'use_cache'):
-        model_kwargs["use_cache"] = False
-    
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         model_kwargs["device_map"] = get_kbit_device_map()
