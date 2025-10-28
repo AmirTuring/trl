@@ -3,7 +3,7 @@
 # Requires: nvidia-smi and runpodctl, plus RUNPOD_POD_ID set
 
 # Usage:
-# nohup ./auto_shutdown.sh & 
+# nohup sh auto_shutdown.sh & 
 # To stop the script:
 # pkill -f auto_shutdown.sh
 
