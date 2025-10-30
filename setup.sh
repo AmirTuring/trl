@@ -33,7 +33,7 @@ uv pip install --upgrade setuptools wheel
 
 # Install requirements
 echo "Installing Python dependencies..."
-uv pip install -r requirements.txt
+uv sync
 
 # Install flash-attention if CUDA is available
 if command -v nvidia-smi &> /dev/null && nvidia-smi -L &> /dev/null; then
