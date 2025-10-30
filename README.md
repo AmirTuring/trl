@@ -7,7 +7,7 @@ A comprehensive library to post-train foundation models using techniques like Su
 ### 1. Clone the Repository
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/AmirTuring/trl.git
 cd trl
 ```
 
@@ -76,13 +76,6 @@ accelerate launch --config_file accelerate_config.yaml examples/scripts/reward_t
 ```bash
 accelerate launch --config_file accelerate_config.yaml examples/scripts/router_trainer.py --config examples/cli_configs/router_config.yaml
 ```
-
-## Key Features
-
-- **Multiple Training Methods**: SFT, DPO, GRPO, PPO, KTO, ORPO, and more
-- **Efficient Scaling**: Multi-GPU support via Accelerate and DeepSpeed
-- **PEFT Integration**: LoRA/QLoRA for efficient fine-tuning on large models
-- **Flash Attention**: Automatic installation when CUDA is detected
 
 ## License
 
