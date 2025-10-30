@@ -41,6 +41,22 @@ cp examples/accelerate_configs/multi_gpu.yaml accelerate_config.yaml
 cp examples/accelerate_configs/deepspeed_zero2.yaml accelerate_config.yaml
 ```
 
+### 4. Auto-Shutdown (Optional - For RunPod Pods)
+
+To save costs on cloud platforms like RunPod, you can enable automatic shutdown after GPU inactivity:
+
+```bash
+# Start the auto-shutdown monitor in background
+nohup sh auto_shutdown.sh &
+
+# To stop the auto-shutdown monitor
+pkill -f auto_shutdown.sh
+```
+
+The script monitors GPU utilization and automatically stops the pod after 10 minutes of idle time (below 5% GPU usage). You can configure these thresholds by editing `auto_shutdown.sh`.
+
+**Requirements:** `nvidia-smi`, `runpodctl`, and `RUNPOD_POD_ID` environment variable must be set.
+
 # Usage
 
 ### GRPO Math Training
