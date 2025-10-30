@@ -229,14 +229,37 @@ def evaluate_and_compare(base_model, finetuned_model, tokenizer, dataset, field_
         
         chosen_texts = []
         rejected_texts = []
+        original_chosen_texts = []
+        original_rejected_texts = []
         batch_indices = []
         
         # Prepare batch data
         for idx, example in enumerate(batch):
             try:
+                # Get original texts from dataset (before tokenizer formatting)
+                chosen_field = field_mapping.get("chosen_field", "chosen")
+                rejected_field = field_mapping.get("rejected_field", "rejected")
+                original_chosen = example[chosen_field]
+                original_rejected = example[rejected_field]
+                
+                # Convert to string representation if it's a list/dict (for display purposes)
+                if isinstance(original_chosen, (list, dict)):
+                    original_chosen_str = str(original_chosen)
+                else:
+                    original_chosen_str = original_chosen
+                
+                if isinstance(original_rejected, (list, dict)):
+                    original_rejected_str = str(original_rejected)
+                else:
+                    original_rejected_str = original_rejected
+                
+                # Get formatted texts for model evaluation
                 chosen_text, rejected_text = format_conversation(example, tokenizer, field_mapping)
+                
                 chosen_texts.append(chosen_text)
                 rejected_texts.append(rejected_text)
+                original_chosen_texts.append(original_chosen_str)
+                original_rejected_texts.append(original_rejected_str)
                 batch_indices.append(batch_start + idx)
             except Exception as e:
                 print(f"Error processing example {batch_start + idx}: {e}")
@@ -266,10 +289,14 @@ def evaluate_and_compare(base_model, finetuned_model, tokenizer, dataset, field_
                 ft_diff = ft_chosen_reward - ft_rejected_reward
                 ft_correct = 1 if ft_chosen_reward >= ft_rejected_reward else 0
                 
+                # Use original dataset texts (truncated for display)
+                original_chosen = original_chosen_texts[i]
+                original_rejected = original_rejected_texts[i]
+                
                 results.append({
                     "index": idx,
-                    "chosen_text": chosen_texts[i][:200] + "..." if len(chosen_texts[i]) > 200 else chosen_texts[i],
-                    "rejected_text": rejected_texts[i][:200] + "..." if len(rejected_texts[i]) > 200 else rejected_texts[i],
+                    "chosen_text": original_chosen,
+                    "rejected_text": original_rejected,
                     "base_reward_chosen": round(base_chosen_reward, 4),
                     "base_reward_rejected": round(base_rejected_reward, 4),
                     "base_diff": round(base_diff, 4),
