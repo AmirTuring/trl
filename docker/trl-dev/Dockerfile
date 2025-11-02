@@ -2,6 +2,6 @@ FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 RUN apt-get update && apt-get install -y git tmux && rm -rf /var/lib/apt/lists/*
 RUN pip install --upgrade pip uv
 RUN uv pip install --system --upgrade setuptools wheel
-RUN uv pip install --system --no-cache "git+https://github.com/huggingface/trl.git#egg=trl[liger,peft,vlm]"
-RUN uv pip install --system hf_transfer liger_kernel trackio peft
+COPY pyproject.toml uv.lock ./
+RUN uv sync --system --group dev
 RUN uv pip install --system flash-attn --no-build-isolation
