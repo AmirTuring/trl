@@ -57,6 +57,27 @@ The script monitors GPU utilization and automatically stops the pod after 10 min
 
 **Requirements:** `nvidia-smi`, `runpodctl`, and `RUNPOD_POD_ID` environment variable must be set.
 
+### 5. Create a tmux Session (Recommended)
+
+For long-running training jobs, it's recommended to use tmux to keep your training running even if your connection drops:
+
+```bash
+# Create a new tmux session named "train"
+tmux new -s train
+
+# Your training commands will run inside this session
+# To detach from the session (keep it running in background): Ctrl+b then d
+
+# To reattach to the session later
+tmux attach -t train
+
+# To list all tmux sessions
+tmux ls
+
+# To kill the session when done
+tmux kill-session -t train
+```
+
 # Usage
 
 ### GRPO Math Training
