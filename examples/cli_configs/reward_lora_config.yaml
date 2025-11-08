@@ -13,19 +13,20 @@ num_labels: 1  # Single scalar reward score (default). Access via: model(**input
 # Option 1: prompt, response_a, response_b, preference (0 for A, 1 for B)
 # Option 2: prompt, chosen, rejected
 datasets:
-  - path: "AmirMohseni/EduArena-Reward-Dataset"
-    split: "train"
+  - path: "AmirMohseni/edu_arena_training_order1"
+    split: "all_data"
 
 # Optional validation dataset configuration
 validation_datasets:
-  - path: "AmirMohseni/EduArena-Reward-Dataset"
+  - path: "AmirMohseni/lmarena_one_turn_one_eval_order_one"
     split: "test"
     
 # Training arguments optimized for reward model training
 learning_rate: 1.0e-4  # Higher learning rate for LoRA
-num_train_epochs: 2
-per_device_train_batch_size: 2
-gradient_accumulation_steps: 8
+num_train_epochs: 1
+#max_steps: 400
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
@@ -33,20 +34,20 @@ max_length: 8192  # Maximum sequence length for reward model
 
 # Learning rate scheduler for better convergence
 lr_scheduler_type: "cosine"  # Cosine annealing for smooth learning rate decay
-warmup_ratio: 0.1  # 10% of training steps for warmup (helps with stability)
+warmup_ratio: 0.01  # 10% of training steps for warmup (helps with stability)
 
 # Mixed precision training (if not auto-detected)
 bf16: true  # Use bfloat16 for better numerical stability than fp16
 
 # Reward-specific settings
-center_rewards_coefficient: 0.01  # Prevents reward scale drift and improves stability
+#center_rewards_coefficient: 0.01  # Prevents reward scale drift and improves stability
 disable_dropout: true  # Disable dropout for reward model stability
 
 # Evaluation
 eval_strategy: "steps"
-eval_steps: 25
+eval_steps: 50
 eval_on_start: true  # Evaluate before training starts
-per_device_eval_batch_size: 8
+per_device_eval_batch_size: 25
 
 # Model selection: save best model based on eval accuracy
 load_best_model_at_end: true  # Load best checkpoint at end of training
@@ -57,20 +58,20 @@ greater_is_better: true  # Higher accuracy is better
 logging_steps: 1
 logging_strategy: steps
 logging_first_step: true
-log_completions: true  # Log completions for debugging and monitoring
-num_completions_to_print: 3  # Number of completions to show in console
+#log_completions: true  # Log completions for debugging and monitoring
+#num_completions_to_print: 3  # Number of completions to show in console
 
-output_dir: "runs/skywork-reward-v2-llama-3.1-8b-lora-rank16"
-run_name: "reward-skywork-reward-v2-llama-3.1-8b-rank16"
+output_dir: "runs/skywork-reward-v2-llama-3.1-8b-rank128-eduarena-all-data-lmarena-all-data"
+run_name: "reward-skywork-reward-v2-llama-3.1-8b-rank128-eduarena-all-data-lmarena-all-data"
 project_name: "reward-model-training" 
 report_to: ["wandb"]
 
 # Resume from checkpoint
-resume_from_checkpoint: true  # Automatically resume from the latest checkpoint in output_dir
+resume_from_checkpoint: false  # Automatically resume from the latest checkpoint in output_dir
 
 # LoRA configuration
 use_peft: true
-lora_r: 16
+lora_r: 128
 lora_alpha: 32
 lora_dropout: 0.01
 lora_target_modules: "all-linear"
@@ -119,5 +120,5 @@ seed: 42  # Set global seed for reproducibility
 
 # Optional: Early stopping to prevent overfitting
 # Uncomment if you want to stop training when eval metric stops improving
-early_stopping_patience: 3  # Stop if no improvement for 3 evals
-early_stopping_threshold: 0.001  # Minimum improvement threshold
+#early_stopping_patience: 3  # Stop if no improvement for 3 evals
+#early_stopping_threshold: 0.001  # Minimum improvement threshold

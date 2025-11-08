@@ -4,7 +4,7 @@ Reward Model Training Script with Enhanced Configuration and WandB Integration
 This script provides reward model training for preference learning with:
 - YAML configuration file support
 - WandB integration with comprehensive logging
-- Flexible dataset format support: chosen/rejected or response_a/response_b + preference
+- Multi-turn conversation support
 - Field mapping for dataset flexibility (customize field names via config)
 - Validation dataset support with separate field mappings
 - Enhanced checkpoint handling
@@ -12,22 +12,18 @@ This script provides reward model training for preference learning with:
 - Model card creation and hub integration
 - Support for both pre-trained reward models and training from scratch
 
-Dataset Format Options:
-Your dataset should have one of these formats (customizable via field_mapping):
+Dataset Format:
+Your dataset should have the following fields (customizable via field_mapping):
 
-Option 1 - Direct chosen/rejected format:
-- prompt_field (default: "prompt"): The input/prompt/question
-- chosen_field (default: "chosen"): The preferred response (can be conversation format)
-- rejected_field (default: "rejected"): The less preferred response (can be conversation format)
+- chosen_field (default: "chosen"): The preferred conversation (single or multi-turn)
+- rejected_field (default: "rejected"): The less preferred conversation (single or multi-turn)
 
-Option 2 - Response A/B + preference format:
-- prompt_field (default: "prompt"): The input/prompt/question
-- response_a_field (default: "response_a"): The first response
-- response_b_field (default: "response_b"): The second response  
-- preference_field (default: "preference"): Which response is preferred (0 for A, 1 for B)
+The chosen and rejected fields should contain conversations in one of these formats:
+1. List of message dicts: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+   - Supports multi-turn conversations with multiple user/assistant exchanges
+2. Pre-formatted text string: Already formatted conversation text
 
-The script automatically handles conversation format inputs where chosen/rejected are already
-formatted as conversation lists with role/content structure.
+The script automatically applies the chat template if the data is in conversation format.
 """
 
 import argparse
@@ -71,15 +67,8 @@ logger.setLevel(logging.INFO)
 @dataclass
 class FieldMappingConfig:
     """Configuration for mapping dataset fields to expected format."""
-    # Option 1: Use prompt + response_a + response_b + preference (0 for A, 1 for B)
-    prompt_field: Optional[str] = "prompt"
-    response_a_field: Optional[str] = "response_a"
-    response_b_field: Optional[str] = "response_b"
-    preference_field: Optional[str] = "preference"  # 0 for A, 1 for B
-    
-    # Option 2: Use prompt + chosen + rejected directly
-    chosen_field: Optional[str] = None  # If set, will use this instead of response_a/b + preference
-    rejected_field: Optional[str] = None
+    chosen_field: str = "chosen"
+    rejected_field: str = "rejected"
 
 @dataclass
 class ScriptArguments(TrlScriptArguments):
@@ -188,59 +177,29 @@ def reward_function(model_args: ModelConfig, script_args: ScriptArguments, train
         """
         Format dataset row into chosen/rejected format for reward modeling.
         
-        Supports two formats:
-        1. prompt + response_a + response_b + preference (0 for A, 1 for B)
-        2. chosen + rejected (direct)
+        Supports multi-turn conversations where chosen/rejected are lists of message dicts:
+        [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...]
         
-        Also handles cases where chosen/rejected are already conversation format.
+        Also handles pre-formatted text strings.
         """
-        # Check if using direct chosen/rejected format
-        if hasattr(field_mapping, 'chosen_field') and hasattr(field_mapping, 'rejected_field') and field_mapping.chosen_field and field_mapping.rejected_field:
-            chosen_response = row[field_mapping.chosen_field]
-            rejected_response = row[field_mapping.rejected_field]
-            
-            # Check if chosen/rejected are already in conversation format (list of dicts with role/content)
-            if isinstance(chosen_response, list) and len(chosen_response) > 0 and isinstance(chosen_response[0], dict):
-                # Already in conversation format, apply chat template directly
-                chosen_text = tokenizer.apply_chat_template(chosen_response, tokenize=False, add_generation_prompt=False)
-            else:
-                # Assume chosen_response is already the full text we want
-                chosen_text = chosen_response
-            
-            if isinstance(rejected_response, list) and len(rejected_response) > 0 and isinstance(rejected_response[0], dict):
-                # Already in conversation format, apply chat template directly
-                rejected_text = tokenizer.apply_chat_template(rejected_response, tokenize=False, add_generation_prompt=False)
-            else:
-                # Assume rejected_response is already the full text we want
-                rejected_text = rejected_response
+        chosen_response = row[field_mapping.chosen_field]
+        rejected_response = row[field_mapping.rejected_field]
+        
+        # Check if chosen/rejected are in conversation format (list of dicts with role/content)
+        # This supports both single-turn and multi-turn conversations
+        if isinstance(chosen_response, list) and len(chosen_response) > 0 and isinstance(chosen_response[0], dict):
+            # Conversation format (single or multi-turn), apply chat template
+            chosen_text = tokenizer.apply_chat_template(chosen_response, tokenize=False, add_generation_prompt=False)
         else:
-            # Use response_a/b + preference format
-            prompt = row[field_mapping.prompt_field]
-            response_a = row[field_mapping.response_a_field]
-            response_b = row[field_mapping.response_b_field]
-            preference = row[field_mapping.preference_field]
-            
-            # Determine chosen and rejected based on preference
-            # preference == 0 means A is chosen, preference == 1 means B is chosen
-            if preference == 0:
-                chosen_response = response_a
-                rejected_response = response_b
-            else:
-                chosen_response = response_b
-                rejected_response = response_a
-            
-            # Create conversation format
-            chosen_conversation = [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": chosen_response}
-            ]
-            chosen_text = tokenizer.apply_chat_template(chosen_conversation, tokenize=False, add_generation_prompt=False)
-            
-            rejected_conversation = [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": rejected_response}
-            ]
-            rejected_text = tokenizer.apply_chat_template(rejected_conversation, tokenize=False, add_generation_prompt=False)
+            # Pre-formatted text string
+            chosen_text = chosen_response
+        
+        if isinstance(rejected_response, list) and len(rejected_response) > 0 and isinstance(rejected_response[0], dict):
+            # Conversation format (single or multi-turn), apply chat template
+            rejected_text = tokenizer.apply_chat_template(rejected_response, tokenize=False, add_generation_prompt=False)
+        else:
+            # Pre-formatted text string
+            rejected_text = rejected_response
         
         return {
             "chosen": chosen_text,
@@ -306,19 +265,14 @@ def reward_function(model_args: ModelConfig, script_args: ScriptArguments, train
 
     train_field_mapping = script_args.field_mapping
     
-    # Determine which format is being used
-    if train_field_mapping.chosen_field and train_field_mapping.rejected_field:
-        logger.info(f"Using direct chosen/rejected format - Prompt: '{train_field_mapping.prompt_field}', "
-                   f"Chosen: '{train_field_mapping.chosen_field}', Rejected: '{train_field_mapping.rejected_field}'")
-    else:
-        logger.info(f"Using response A/B + preference format - Prompt: '{train_field_mapping.prompt_field}', "
-                   f"Response A: '{train_field_mapping.response_a_field}', Response B: '{train_field_mapping.response_b_field}', "
-                   f"Preference: '{train_field_mapping.preference_field}'")
+    logger.info(f"Using field mapping - Chosen: '{train_field_mapping.chosen_field}', "
+               f"Rejected: '{train_field_mapping.rejected_field}'")
 
     eval_field_mapping = train_field_mapping
     if script_args.validation_field_mapping is not None:
         eval_field_mapping = script_args.validation_field_mapping
-        logger.info(f"Using separate validation field mapping")
+        logger.info(f"Using separate validation field mapping - Chosen: '{eval_field_mapping.chosen_field}', "
+                   f"Rejected: '{eval_field_mapping.rejected_field}'")
 
     logger.info("Formatting dataset...")
     train_dataset = train_dataset.map(
