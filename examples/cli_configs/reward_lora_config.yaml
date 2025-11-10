@@ -31,6 +31,7 @@ gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 max_length: 8192  # Maximum sequence length for reward model
+filter_long_sequences: true  # If true, discard examples exceeding max_length instead of truncating
 
 # Learning rate scheduler for better convergence
 lr_scheduler_type: "cosine"  # Cosine annealing for smooth learning rate decay

@@ -11,6 +11,7 @@ This script provides reward model training for preference learning with:
 - LoRA support via PEFT
 - Model card creation and hub integration
 - Support for both pre-trained reward models and training from scratch
+- Optional filtering of sequences exceeding max_length (instead of truncation)
 
 Dataset Format:
 Your dataset should have the following fields (customizable via field_mapping):
@@ -24,6 +25,10 @@ The chosen and rejected fields should contain conversations in one of these form
 2. Pre-formatted text string: Already formatted conversation text
 
 The script automatically applies the chat template if the data is in conversation format.
+
+Sequence Length Handling:
+- By default, sequences exceeding max_length are truncated
+- Set filter_long_sequences=True to discard examples where either chosen or rejected exceed max_length
 """
 
 import argparse
@@ -82,6 +87,13 @@ class ScriptArguments(TrlScriptArguments):
         default=1,
         metadata={
             "help": "Number of labels for the reward model. Use 1 for scalar rewards (default). "
+        }
+    )
+    filter_long_sequences: bool = field(
+        default=False,
+        metadata={
+            "help": "If True, discard examples where chosen or rejected sequences exceed max_length. "
+                    "If False (default), sequences will be truncated."
         }
     )
 
@@ -285,6 +297,32 @@ def reward_function(model_args: ModelConfig, script_args: ScriptArguments, train
             lambda row: format_dataset(row, eval_field_mapping),
             desc="Formatting eval dataset"
         )
+
+    # Filter long sequences if requested
+    if script_args.filter_long_sequences:
+        max_length = getattr(training_args, 'max_length', 1024)
+        logger.info(f"Filtering sequences longer than {max_length} tokens...")
+        
+        def is_within_length(example):
+            """Check if both chosen and rejected fit within max_length."""
+            chosen_tokens = tokenizer(example['chosen'], truncation=False, add_special_tokens=True)
+            rejected_tokens = tokenizer(example['rejected'], truncation=False, add_special_tokens=True)
+            return len(chosen_tokens['input_ids']) <= max_length and len(rejected_tokens['input_ids']) <= max_length
+        
+        train_size_before = len(train_dataset)
+        train_dataset = train_dataset.filter(is_within_length, desc="Filtering long sequences from train dataset")
+        train_size_after = len(train_dataset)
+        logger.info(f"Training dataset: {train_size_before} -> {train_size_after} examples "
+                   f"({train_size_before - train_size_after} filtered, "
+                   f"{100 * train_size_after / train_size_before:.2f}% retained)")
+        
+        if eval_dataset is not None:
+            eval_size_before = len(eval_dataset)
+            eval_dataset = eval_dataset.filter(is_within_length, desc="Filtering long sequences from eval dataset")
+            eval_size_after = len(eval_dataset)
+            logger.info(f"Validation dataset: {eval_size_before} -> {eval_size_after} examples "
+                       f"({eval_size_before - eval_size_after} filtered, "
+                       f"{100 * eval_size_after / eval_size_before:.2f}% retained)")
 
     sample = train_dataset[0]
     logger.info(f"Sample chosen text (first 300 chars): {sample['chosen'][:300]}...")

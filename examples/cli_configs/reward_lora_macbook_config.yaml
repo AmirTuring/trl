@@ -29,6 +29,7 @@ gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 max_length: 2048  # Maximum sequence length for reward model
+filter_long_sequences: false  # If true, discard examples exceeding max_length instead of truncating
 
 # Reward-specific settings
 #center_rewards_coefficient: 0.01  # Incentivize mean-zero rewards (recommended)
