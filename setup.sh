@@ -52,6 +52,10 @@ uv pip install --upgrade setuptools wheel
 echo "Installing Python dependencies..."
 uv sync
 
+# Install local package in editable mode
+echo "Installing local package in editable mode..."
+uv pip install -e .
+
 # Install flash-attention if CUDA is available
 if command -v nvidia-smi &> /dev/null && nvidia-smi -L &> /dev/null; then
     echo "CUDA detected. Installing flash-attention..."
