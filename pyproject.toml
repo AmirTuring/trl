@@ -1,5 +1,5 @@
 [project]
-name = "local-trl-experiments"
+name = "trl"
 version = "0.1.0"
 description = "Local experiments using Hugging Face TRL"
 readme = "README.md"
