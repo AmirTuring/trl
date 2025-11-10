@@ -7,11 +7,7 @@ import os
 from typing import Tuple
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
-from transformers.utils import is_peft_available
-
-
-if is_peft_available():
-    from peft import PeftModel
+from peft import PeftModel
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +18,7 @@ def merge_lora_adapter(
     tokenizer: PreTrainedTokenizer,
     output_dir: str,
     is_main_process: bool = True,
+    torch_dtype=None,
 ) -> Tuple[PreTrainedModel, str]:
     """
     Merge LoRA adapter weights with the base model and save it.
@@ -39,6 +36,9 @@ def merge_lora_adapter(
         is_main_process (`bool`, *optional*, defaults to `True`):
             Whether this is the main process (for distributed training). Only the main
             process should save the model.
+        torch_dtype (`torch.dtype`, *optional*):
+            The dtype to use when saving the merged model. If not provided, uses the
+            model's current dtype. This prevents unwanted conversion to fp32.
     
     Returns:
         merged_model (`PreTrainedModel`):
@@ -72,11 +72,6 @@ def merge_lora_adapter(
     merged_model.push_to_hub("username/my-merged-model")
     ```
     """
-    if not is_peft_available():
-        raise ImportError(
-            "PEFT is not installed. Please install it with: pip install peft"
-        )
-    
     if not isinstance(model, PeftModel):
         raise ValueError(
             f"Model must be a PeftModel instance to merge adapters. Got {type(model).__name__}"
@@ -98,7 +93,18 @@ def merge_lora_adapter(
     if is_main_process:
         os.makedirs(merged_output_dir, exist_ok=True)
         
+        # Determine dtype for saving
+        save_dtype = torch_dtype if torch_dtype is not None else getattr(merged_model.config, 'torch_dtype', None)
+        
+        # Convert model to target dtype if specified
+        if save_dtype is not None:
+            logger.info(f"Converting merged model to dtype: {save_dtype}")
+            merged_model = merged_model.to(dtype=save_dtype)
+            # Update config to reflect the dtype
+            merged_model.config.torch_dtype = save_dtype
+        
         # Save the merged model
+        logger.info(f"Saving merged model with dtype: {merged_model.dtype if hasattr(merged_model, 'dtype') else save_dtype}")
         merged_model.save_pretrained(merged_output_dir)
         tokenizer.save_pretrained(merged_output_dir)
         

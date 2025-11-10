@@ -375,53 +375,90 @@ def reward_function(model_args: ModelConfig, script_args: ScriptArguments, train
     ############################
     # Save model and push to Hub
     ############################
-    trainer.save_model(training_args.output_dir)
-    tokenizer.save_pretrained(training_args.output_dir)
-    logger.info(f"Model and tokenizer saved to {training_args.output_dir}")
-
-    if training_args.eval_strategy != "no":
-        metrics = trainer.evaluate()
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    if trainer.accelerator.is_main_process:
-        trainer.create_model_card({"tags": ["reward-model", "preference-learning"]})
-
     # Handle LoRA merging and pushing to hub
-    if training_args.push_to_hub:
-        if model_args.use_peft and script_args.merge_lora_and_push:
-            logger.info("*** Merging LoRA adapter with base model ***")
-            try:
-                # Merge adapter with base model
-                merged_model, merged_output_dir = merge_lora_adapter(
-                    model=trainer.model,
-                    tokenizer=tokenizer,
-                    output_dir=training_args.output_dir,
-                    is_main_process=trainer.accelerator.is_main_process,
+    if training_args.push_to_hub and model_args.use_peft and script_args.merge_lora_and_push:
+        logger.info("*** Merging LoRA adapter with base model ***")
+        try:
+            # Get the dtype from training args to preserve it during merge/save
+            # This is more reliable than inferring from the model
+            if training_args.bf16:
+                model_dtype = torch.bfloat16
+            elif training_args.fp16:
+                model_dtype = torch.float16
+            else:
+                # Fallback to model's actual dtype
+                base_model = getattr(trainer.model, 'base_model', trainer.model)
+                if hasattr(base_model, 'model'):
+                    base_model = base_model.model  # Unwrap PeftModel
+                model_dtype = getattr(base_model.config, 'torch_dtype', None)
+                if model_dtype is None:
+                    model_dtype = next(base_model.parameters()).dtype
+            
+            logger.info(f"Preserving model dtype: {model_dtype}")
+            
+            # Merge adapter with base model (saves to output_dir directly as the main model)
+            merged_model, merged_output_dir = merge_lora_adapter(
+                model=trainer.model,
+                tokenizer=tokenizer,
+                output_dir=training_args.output_dir,
+                is_main_process=trainer.accelerator.is_main_process,
+                torch_dtype=model_dtype,
+            )
+            logger.info(f"Merged model saved locally to {merged_output_dir}")
+            
+            # Save the merged model to the main output directory (overwriting adapter-only version)
+            if trainer.accelerator.is_main_process:
+                logger.info(f"Saving merged model as main model to {training_args.output_dir}")
+                merged_model.save_pretrained(training_args.output_dir)
+                tokenizer.save_pretrained(training_args.output_dir)
+            
+            # Run evaluation if needed
+            if training_args.eval_strategy != "no":
+                metrics = trainer.evaluate()
+                trainer.log_metrics("eval", metrics)
+                trainer.save_metrics("eval", metrics)
+            
+            # Create model card
+            if trainer.accelerator.is_main_process:
+                trainer.create_model_card({"tags": ["reward-model", "preference-learning"]})
+            
+            # Push merged model to hub as the main model
+            if trainer.accelerator.is_main_process:
+                merged_model.push_to_hub(
+                    repo_id=trainer.hub_model_id,
+                    commit_message=f"Merged Reward Model - Step {trainer.state.global_step}",
+                    private=True,
                 )
-                logger.info(f"Merged model saved locally to {merged_output_dir}")
+                tokenizer.push_to_hub(
+                    repo_id=trainer.hub_model_id,
+                    commit_message=f"Merged Reward Model - Step {trainer.state.global_step}",
+                    private=True,
+                )
+                logger.info(f"🤗 Merged model pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
                 
-                # Push merged model to hub
-                if trainer.accelerator.is_main_process:
-                    merged_model.push_to_hub(
-                        repo_id=trainer.hub_model_id,
-                        commit_message=f"Merged Reward Model - Step {trainer.state.global_step}",
-                        private=True,
-                    )
-                    tokenizer.push_to_hub(
-                        repo_id=trainer.hub_model_id,
-                        commit_message=f"Merged Reward Model - Step {trainer.state.global_step}",
-                        private=True,
-                    )
-                    logger.info(f"🤗 Merged model pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
-                    
-            except Exception as e:
-                logger.error(f"Failed to merge and push LoRA adapter: {e}")
-                logger.info("Falling back to pushing adapter only")
-                trainer.push_to_hub(dataset_name=script_args.dataset_name, 
-                                  commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}")
-        else:
-            # Regular push (with adapter if using LoRA)
+        except Exception as e:
+            logger.error(f"Failed to merge and push LoRA adapter: {e}")
+            logger.info("Falling back to pushing adapter only")
+            trainer.save_model(training_args.output_dir)
+            tokenizer.save_pretrained(training_args.output_dir)
+            trainer.push_to_hub(dataset_name=script_args.dataset_name, 
+                              commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}")
+    else:
+        # Save model with adapter (or full model if not using PEFT)
+        trainer.save_model(training_args.output_dir)
+        tokenizer.save_pretrained(training_args.output_dir)
+        logger.info(f"Model and tokenizer saved to {training_args.output_dir}")
+        
+        if training_args.eval_strategy != "no":
+            metrics = trainer.evaluate()
+            trainer.log_metrics("eval", metrics)
+            trainer.save_metrics("eval", metrics)
+
+        if trainer.accelerator.is_main_process:
+            trainer.create_model_card({"tags": ["reward-model", "preference-learning"]})
+        
+        # Regular push (with adapter if using LoRA)
+        if training_args.push_to_hub:
             trainer.push_to_hub(dataset_name=script_args.dataset_name, 
                               commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}")
             if model_args.use_peft:
