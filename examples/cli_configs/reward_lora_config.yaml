@@ -88,6 +88,7 @@ save_steps: 50
 save_total_limit: 3  # Keep 3 best checkpoints
 push_to_hub: true
 hub_strategy: "every_save"  # Push to hub at every save (or use "end" for only final model)
+merge_lora_and_push: false  # If true, merge LoRA adapter with base model before pushing to hub (creates standalone model)
 
 # Field mapping - Option 1: Using response_a/b + preference format
 # The ultrafeedback_binarized dataset already has "chosen" and "rejected" fields,

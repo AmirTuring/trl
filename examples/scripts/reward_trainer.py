@@ -12,6 +12,7 @@ This script provides reward model training for preference learning with:
 - Model card creation and hub integration
 - Support for both pre-trained reward models and training from scratch
 - Optional filtering of sequences exceeding max_length (instead of truncation)
+- Optional LoRA adapter merging before pushing to hub
 
 Dataset Format:
 Your dataset should have the following fields (customizable via field_mapping):
@@ -29,6 +30,11 @@ The script automatically applies the chat template if the data is in conversatio
 Sequence Length Handling:
 - By default, sequences exceeding max_length are truncated
 - Set filter_long_sequences=True to discard examples where either chosen or rejected exceed max_length
+
+LoRA Merging:
+- By default, when using LoRA (use_peft=True), only the adapter is pushed to hub
+- Set merge_lora_and_push=True to merge the adapter with the base model before pushing
+- This creates a standalone model that doesn't require loading the adapter separately
 """
 
 import argparse
@@ -55,6 +61,7 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
+    merge_lora_adapter,
     setup_chat_format,
 )
 
@@ -94,6 +101,13 @@ class ScriptArguments(TrlScriptArguments):
         metadata={
             "help": "If True, discard examples where chosen or rejected sequences exceed max_length. "
                     "If False (default), sequences will be truncated."
+        }
+    )
+    merge_lora_and_push: bool = field(
+        default=False,
+        metadata={
+            "help": "If True and using LoRA, merge the adapter with the base model before pushing to hub. "
+                    "This creates a standalone model without requiring the adapter. Only applies if use_peft=True."
         }
     )
 
@@ -373,9 +387,47 @@ def reward_function(model_args: ModelConfig, script_args: ScriptArguments, train
     if trainer.accelerator.is_main_process:
         trainer.create_model_card({"tags": ["reward-model", "preference-learning"]})
 
+    # Handle LoRA merging and pushing to hub
     if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name=script_args.dataset_name, commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}")
-        logger.info(f"🤗 Model pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
+        if model_args.use_peft and script_args.merge_lora_and_push:
+            logger.info("*** Merging LoRA adapter with base model ***")
+            try:
+                # Merge adapter with base model
+                merged_model, merged_output_dir = merge_lora_adapter(
+                    model=trainer.model,
+                    tokenizer=tokenizer,
+                    output_dir=training_args.output_dir,
+                    is_main_process=trainer.accelerator.is_main_process,
+                )
+                logger.info(f"Merged model saved locally to {merged_output_dir}")
+                
+                # Push merged model to hub
+                if trainer.accelerator.is_main_process:
+                    merged_model.push_to_hub(
+                        repo_id=trainer.hub_model_id,
+                        commit_message=f"Merged Reward Model - Step {trainer.state.global_step}",
+                        private=True,
+                    )
+                    tokenizer.push_to_hub(
+                        repo_id=trainer.hub_model_id,
+                        commit_message=f"Merged Reward Model - Step {trainer.state.global_step}",
+                        private=True,
+                    )
+                    logger.info(f"🤗 Merged model pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to merge and push LoRA adapter: {e}")
+                logger.info("Falling back to pushing adapter only")
+                trainer.push_to_hub(dataset_name=script_args.dataset_name, 
+                                  commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}")
+        else:
+            # Regular push (with adapter if using LoRA)
+            trainer.push_to_hub(dataset_name=script_args.dataset_name, 
+                              commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}")
+            if model_args.use_peft:
+                logger.info(f"🤗 LoRA adapter pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
+            else:
+                logger.info(f"🤗 Model pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
 
     if trainer.accelerator.is_main_process and wandb.run:
         wandb.finish()

@@ -41,6 +41,7 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "extras": ["BestOfNSampler"],
+    "lora_utils": ["merge_lora_adapter"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
@@ -121,6 +122,7 @@ if TYPE_CHECKING:
         unpair_preference_dataset,
     )
     from .extras import BestOfNSampler
+    from .lora_utils import merge_lora_adapter
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,

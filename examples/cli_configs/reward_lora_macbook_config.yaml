@@ -70,6 +70,7 @@ save_strategy: "steps"
 save_steps: 100
 save_total_limit: 1
 push_to_hub: false
+merge_lora_and_push: false  # If true, merge LoRA adapter with base model before pushing to hub (creates standalone model)
 
 # Field mapping - Option 1: Using response_a/b + preference format
 # The ultrafeedback_binarized dataset already has "chosen" and "rejected" fields,
