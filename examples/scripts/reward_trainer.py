@@ -427,12 +427,12 @@ def reward_function(model_args: ModelConfig, script_args: ScriptArguments, train
                 merged_model.push_to_hub(
                     repo_id=trainer.hub_model_id,
                     commit_message=f"Merged Reward Model - Step {trainer.state.global_step}",
-                    private=True,
+                    private=training_args.hub_private,
                 )
                 tokenizer.push_to_hub(
                     repo_id=trainer.hub_model_id,
                     commit_message=f"Merged Reward Model - Step {trainer.state.global_step}",
-                    private=True,
+                    private=training_args.hub_private,
                 )
                 logger.info(f"🤗 Merged model pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
                 
@@ -441,8 +441,11 @@ def reward_function(model_args: ModelConfig, script_args: ScriptArguments, train
             logger.info("Falling back to pushing adapter only")
             trainer.save_model(training_args.output_dir)
             tokenizer.save_pretrained(training_args.output_dir)
-            trainer.push_to_hub(dataset_name=script_args.dataset_name, 
-                              commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}")
+            trainer.push_to_hub(
+                dataset_name=script_args.dataset_name, 
+                commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}",
+                private=training_args.hub_private,
+            )
     else:
         # Save model with adapter (or full model if not using PEFT)
         trainer.save_model(training_args.output_dir)
@@ -459,8 +462,11 @@ def reward_function(model_args: ModelConfig, script_args: ScriptArguments, train
         
         # Regular push (with adapter if using LoRA)
         if training_args.push_to_hub:
-            trainer.push_to_hub(dataset_name=script_args.dataset_name, 
-                              commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}")
+            trainer.push_to_hub(
+                dataset_name=script_args.dataset_name, 
+                commit_message=f"Reward Model checkpoint - Step {trainer.state.global_step}",
+                private=training_args.hub_private,
+            )
             if model_args.use_peft:
                 logger.info(f"🤗 LoRA adapter pushed to Hub: https://huggingface.co/{trainer.hub_model_id}")
             else:

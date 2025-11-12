@@ -119,6 +119,12 @@ class RewardConfig(TrainingArguments):
             "logged to WandB/Comet if log_completions is True. Set to -1 to print all."
         },
     )
+    hub_private: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to push the model to the Hugging Face Hub as a private repository."
+        },
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16

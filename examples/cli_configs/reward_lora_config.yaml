@@ -13,13 +13,13 @@ num_labels: 1  # Single scalar reward score (default). Access via: model(**input
 # Option 1: prompt, response_a, response_b, preference (0 for A, 1 for B)
 # Option 2: prompt, chosen, rejected
 datasets:
-  - path: "AmirMohseni/edu_arena_training_order1"
+  - path: "AmirMohseni/eduArena-training-bard-single-turn"
     split: "all_data"
 
 # Optional validation dataset configuration
 validation_datasets:
-  - path: "AmirMohseni/lmarena_one_turn_one_eval_order_one"
-    split: "test"
+  - path: "AmirMohseni/arena-preference-data-no-ties"
+    split: "train"
     
 # Training arguments optimized for reward model training
 learning_rate: 1.0e-4  # Higher learning rate for LoRA
@@ -30,7 +30,7 @@ gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-max_length: 8192  # Maximum sequence length for reward model
+max_length: 4096  # Maximum sequence length for reward model
 filter_long_sequences: true  # If true, discard examples exceeding max_length instead of truncating
 
 # Learning rate scheduler for better convergence
@@ -48,7 +48,7 @@ disable_dropout: true  # Disable dropout for reward model stability
 eval_strategy: "steps"
 eval_steps: 50
 eval_on_start: true  # Evaluate before training starts
-per_device_eval_batch_size: 25
+per_device_eval_batch_size: 30
 
 # Model selection: save best model based on eval accuracy
 load_best_model_at_end: true  # Load best checkpoint at end of training
@@ -62,8 +62,8 @@ logging_first_step: true
 #log_completions: true  # Log completions for debugging and monitoring
 #num_completions_to_print: 3  # Number of completions to show in console
 
-output_dir: "runs/skywork-reward-v2-llama-3.1-8b-rank128-eduarena-all-data-lmarena-all-data"
-run_name: "reward-skywork-reward-v2-llama-3.1-8b-rank128-eduarena-all-data-lmarena-all-data"
+output_dir: "runs/skywork-reward-v2-llama-3.1-8b-rank128-bard-lmarena-all"
+run_name: "reward-skywork-reward-v2-llama-3.1-8b-rank128-bard-lmarena-all"
 project_name: "reward-model-training" 
 report_to: ["wandb"]
 
@@ -88,16 +88,8 @@ save_steps: 50
 save_total_limit: 3  # Keep 3 best checkpoints
 push_to_hub: true
 hub_strategy: "every_save"  # Push to hub at every save (or use "end" for only final model)
+hub_private: true  # Push model as private to Hugging Face Hub
 merge_lora_and_push: false  # If true, merge LoRA adapter with base model before pushing to hub (creates standalone model)
-
-# Field mapping - Option 1: Using response_a/b + preference format
-# The ultrafeedback_binarized dataset already has "chosen" and "rejected" fields,
-# so we use Option 2 below instead
-#field_mapping:
-#  prompt_field: "prompt"
-#  response_a_field: "response_a"
-#  response_b_field: "response_b"
-#  preference_field: "preference"  # 0 for A, 1 for B
 
 # Field mapping - Option 2: Using direct chosen/rejected format (recommended)
 field_mapping:
