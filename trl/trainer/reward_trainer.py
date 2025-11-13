@@ -401,6 +401,7 @@ class RewardTrainer(Trainer):
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
         tags: Union[str, list[str], None] = None,
+        **kwargs,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -412,6 +413,8 @@ class RewardTrainer(Trainer):
                 Name of the dataset used for training.
             tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
+            **kwargs:
+                Additional keyword arguments (e.g., `private`) passed by `push_to_hub()`.
         """
         if not self.is_world_process_zero():
             return
