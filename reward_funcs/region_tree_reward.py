@@ -7,7 +7,9 @@ This module contains reward functions for training VLMs on:
 """
 
 import re
-from typing import Optional
+from typing import Optional, List, Tuple
+
+import networkx as nx
 
 from .base import BaseRewardFunction
 
@@ -87,24 +89,60 @@ def parse_num_nodes_from_completion(content: str) -> Optional[int]:
         return None
 
 
-def normalize_tree(edges: list[tuple[int, int]]) -> set[tuple[int, int]]:
+def are_trees_isomorphic(edges1: List[Tuple[int, int]], 
+                         edges2: List[Tuple[int, int]]) -> bool:
     """
-    Normalize a tree representation for comparison.
+    Check if two trees are isomorphic.
     
-    - Converts to set of tuples for undirected edge comparison
-    - Handles edge ordering (0,1) == (1,0)
+    Two trees are isomorphic if they have the same structure, meaning
+    one can be obtained from the other by relabeling nodes.
+    
+    Args:
+        edges1: First tree as list of (node1, node2) tuples
+        edges2: Second tree as list of (node1, node2) tuples
+        
+    Returns:
+        True if trees are isomorphic, False otherwise
+        
+    Examples:
+        >>> edges1 = [(0, 1), (0, 2), (1, 3)]
+        >>> edges2 = [(0, 2), (0, 1), (2, 3)]
+        >>> are_trees_isomorphic(edges1, edges2)
+        True
+        
+        >>> edges1 = [(0, 1), (0, 2)]
+        >>> edges2 = [(0, 1), (1, 2)]
+        >>> are_trees_isomorphic(edges1, edges2)
+        False
     """
-    normalized = set()
-    for a, b in edges:
-        # Sort edge vertices to handle undirected edges
-        edge = (min(a, b), max(a, b))
-        normalized.add(edge)
-    return normalized
+    # Handle empty trees (single node - root only)
+    if not edges1 and not edges2:
+        return True
+    if not edges1 or not edges2:
+        return False
+    
+    # Create undirected graphs from edge lists (trees are undirected)
+    G1 = nx.Graph(edges1)
+    G2 = nx.Graph(edges2)
+    
+    # Check if they have the same number of nodes
+    if len(G1.nodes) != len(G2.nodes):
+        return False
+    
+    # Check if they have the same number of edges
+    if len(G1.edges) != len(G2.edges):
+        return False
+    
+    # Use NetworkX isomorphism checker
+    return nx.is_isomorphic(G1, G2)
 
 
 def tree_correctness_reward(completions, tree: list[list[int]], **kwargs) -> list[float]:
     """
-    Reward function that checks if the predicted tree matches the ground truth.
+    Reward function that checks if the predicted tree is isomorphic to the ground truth.
+    
+    Uses tree isomorphism checking - two trees are considered correct if they have
+    the same structure, even if node labels differ.
     
     Args:
         completions: List of model completions (each is a list with one dict containing 'content')
@@ -112,7 +150,7 @@ def tree_correctness_reward(completions, tree: list[list[int]], **kwargs) -> lis
         **kwargs: Additional keyword arguments
         
     Returns:
-        List of float rewards (1.0 for correct, partial for overlap, 0.0 for wrong)
+        List of float rewards (1.0 for isomorphic, 0.0 for not isomorphic)
     """
     rewards = []
     contents = [completion[0]["content"] for completion in completions]
@@ -122,30 +160,19 @@ def tree_correctness_reward(completions, tree: list[list[int]], **kwargs) -> lis
             # Parse predicted tree from completion
             pred_edges = parse_tree_from_completion(content)
             
-            if not pred_edges:
+            if not pred_edges and gt_tree:
+                # Predicted empty but ground truth has edges
                 rewards.append(0.0)
                 continue
             
             # Convert ground truth to list of tuples
             gt_edges = [(edge[0], edge[1]) for edge in gt_tree]
             
-            # Normalize both trees for comparison
-            pred_normalized = normalize_tree(pred_edges)
-            gt_normalized = normalize_tree(gt_edges)
-            
-            # Check if trees match exactly
-            if pred_normalized == gt_normalized:
+            # Check if trees are isomorphic
+            if are_trees_isomorphic(pred_edges, gt_edges):
                 rewards.append(1.0)
             else:
-                # Partial credit based on edge overlap
-                if len(gt_normalized) > 0:
-                    intersection = pred_normalized & gt_normalized
-                    # Jaccard similarity as partial reward
-                    union = pred_normalized | gt_normalized
-                    partial_reward = len(intersection) / len(union) if union else 0.0
-                    rewards.append(partial_reward)
-                else:
-                    rewards.append(0.0)
+                rewards.append(0.0)
                     
         except Exception as e:
             print(f"Tree parsing error: {e}, content: {content[:200]}...")
@@ -197,8 +224,8 @@ class TreeCorrectnessReward(BaseRewardFunction):
     """
     Reward function class for evaluating region-adjacency tree correctness.
     
-    Compares predicted tree edges with ground truth using Jaccard similarity
-    for partial credit.
+    Uses tree isomorphism checking - two trees are considered correct if they 
+    have the same structure, even if node labels differ.
     """
     
     def __init__(self):
@@ -206,7 +233,7 @@ class TreeCorrectnessReward(BaseRewardFunction):
         self.__name__ = "TreeCorrectnessReward"
     
     def calculate_rewards(self, completions, tree: list[list[int]] = None, **kwargs) -> list[float]:
-        """Calculate tree correctness rewards."""
+        """Calculate tree correctness rewards using isomorphism checking."""
         if tree is None:
             tree = kwargs.get('tree', [])
         return tree_correctness_reward(completions, tree, **kwargs)
@@ -265,4 +292,3 @@ class ThinkAnswerFormatReward(BaseRewardFunction):
     def calculate_rewards(self, completions, **kwargs) -> list[float]:
         """Calculate format rewards."""
         return think_answer_format_reward(completions, **kwargs)
-

@@ -21,7 +21,7 @@ from .region_tree_reward import (
     parse_tree_from_completion,
     parse_num_nodes_from_completion,
     extract_answer_content,
-    normalize_tree,
+    are_trees_isomorphic,
 )
 from .serialization import (
     serialize_reward_function,
@@ -92,5 +92,5 @@ __all__ = [
     'parse_tree_from_completion',
     'parse_num_nodes_from_completion',
     'extract_answer_content',
-    'normalize_tree',
+    'are_trees_isomorphic',
 ]
