@@ -1,0 +1,96 @@
+# GRPO VLM Training Configuration for Region Counting Task
+# Training a VLM to count the number of regions in images of non-crossing closed curves
+# Dataset: https://huggingface.co/datasets/AmirMohseni/curvebench
+
+# Dataset configuration - CurveBench easy split with 80/20 train/test
+datasets:
+  - path: AmirMohseni/curvebench
+    name: easy
+    split: train[:80%]
+
+# Validation dataset - last 20% of easy split
+validation_datasets:
+  - path: AmirMohseni/curvebench
+    name: easy
+    split: train[80%:]
+
+# Field mapping - map dataset fields
+field_mapping:
+  image_field: image
+  num_nodes_field: num_nodes
+  tree_field: tree
+
+# Model configuration - Qwen3-VL-4B
+model_name_or_path: Qwen/Qwen3-VL-4B-Instruct
+model_revision: main
+torch_dtype: bfloat16
+trust_remote_code: true
+
+# Training configuration
+output_dir: runs/grpo-region-count-qwen3-vl-4b
+num_train_epochs: 3
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 16
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+learning_rate: 5.0e-7
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+
+# GRPO specific parameters
+beta: 0.001
+loss_type: "dr_grpo"
+max_prompt_length: 2048
+max_completion_length: 512  # Shorter since we just need a number
+num_generations: 8
+reward_weights: [0.2, 0.8]  # [format_reward, num_nodes_reward]
+
+# VLLM configuration for fast generation
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.25
+
+# Logging configuration
+logging_strategy: steps
+logging_steps: 1
+save_strategy: steps
+save_steps: 50
+save_total_limit: 3
+log_completions: true
+num_completions_to_print: 3
+
+# Evaluation configuration
+eval_strategy: steps
+eval_steps: 50
+eval_on_start: false
+
+# Script-specific arguments
+dataset_seed: 42
+task_mode: num_nodes  # Counting regions task
+
+# PEFT/LoRA configuration
+use_peft: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.1
+lora_task_type: "CAUSAL_LM"
+lora_target_modules: "all-linear"
+
+# Reporting
+report_to: 
+  - wandb
+run_name: grpo-region-count-qwen3-vl-4b
+project_name: curvebench
+
+# Hugging Face Hub (optional)
+# push_to_hub: true
+# hub_strategy: every_save
+# hub_model_id: AmirMohseni/grpo-region-count-qwen3-vl-4b
+
+# Additional VLM-specific optimizations
+dataloader_num_workers: 2
+dataloader_pin_memory: true
+remove_unused_columns: false

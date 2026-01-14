@@ -1,0 +1,18 @@
+python scripts/compare_reward_models.py \
+        --config examples/cli_configs/reward_lora_config.yaml \
+        --finetuned_model "AmirMohseni/skywork-reward-v2-llama-3.1-8b-lora-rank128-eduarena_with_embedding_filtering_en_lmarena_eval-v2" \
+        --dataset_path "AmirMohseni/lmarena_with_embedding_selection_edu_all_languages" \
+        --dataset_split "train" \
+        --output_file "edu_reward_comparison.csv"
+
+accelerate launch --config_file accelerate_config.yaml examples/scripts/router_trainer.py --config examples/cli_configs/router_config.yaml
+
+accelerate launch --config_file accelerate_config.yaml examples/scripts/reward_trainer.py --config examples/cli_configs/reward_lora_config.yaml
+
+cp examples/accelerate_configs/single_gpu.yaml accelerate_config.yaml
+
+# CurveBench - Region Tree Training (tree generation task)
+accelerate launch --config_file accelerate_config.yaml examples/scripts/grpo_region_tree.py --config examples/cli_configs/grpo_region_tree_config.yaml
+
+# CurveBench - Region Count Training (num_nodes counting task)
+accelerate launch --config_file accelerate_config.yaml examples/scripts/grpo_region_tree.py --config examples/cli_configs/grpo_region_tree_num_nodes_config.yaml
