@@ -183,15 +183,15 @@ def tree_correctness_reward(completions, tree: list[list[int]], **kwargs) -> lis
 
 def num_nodes_reward(completions, num_nodes: list[int], **kwargs) -> list[float]:
     """
-    Reward function that checks if the predicted number of nodes/regions is correct.
+    Reward function that checks if the predicted number of shapes is correct.
     
     Args:
         completions: List of model completions (each is a list with one dict containing 'content')
-        num_nodes: List of ground truth number of nodes
+        num_nodes: List of ground truth number of shapes
         **kwargs: Additional keyword arguments
         
     Returns:
-        List of float rewards (1.0 for correct, partial for close, 0.0 for wrong)
+        List of float rewards (1.0 for correct, 0.0 for wrong)
     """
     rewards = []
     contents = [completion[0]["content"] for completion in completions]
@@ -207,11 +207,7 @@ def num_nodes_reward(completions, num_nodes: list[int], **kwargs) -> list[float]
             if pred_num == gt_num:
                 rewards.append(1.0)
             else:
-                # Partial reward based on how close the prediction is
-                # Using inverse of relative error, capped at 0
-                error = abs(pred_num - gt_num) / max(gt_num, 1)
-                partial_reward = max(0.0, 1.0 - error)
-                rewards.append(partial_reward)
+                rewards.append(0.0)
                 
         except Exception as e:
             print(f"Num nodes parsing error: {e}, content: {content[:200]}...")

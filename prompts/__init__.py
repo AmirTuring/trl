@@ -47,25 +47,19 @@ Format your response as:
 1 3
 </answer>"""
 
-# Region counting system prompt - for counting regions in curve images
-REGION_COUNT_SYSTEM_PROMPT = """You are an expert at analyzing images of non-crossing closed curves and counting regions.
+# Shape counting system prompt - for counting shapes/curves in images
+REGION_COUNT_SYSTEM_PROMPT = """You are an expert at analyzing images of non-crossing closed curves and counting shapes.
 
-Given an image of non-crossing closed curves, count the total number of regions:
-1. Count the outer infinite region (the background).
-2. Count each region created by closed curves.
+Given an image of non-crossing closed curves, count the total number of shapes (closed curves) in the image.
 
-Think step by step about the curves and the regions they create.
-Format your response as:
-<think>
-[Your reasoning about the curves and regions]
-</think>
+Provide your answer as a single number inside <answer></answer> tags.
 <answer>
 [number]
 </answer>"""
 
 # User prompts for region tree tasks
 REGION_TREE_USER_PROMPT = "Construct the region-adjacency tree for this image of non-crossing closed curves."
-REGION_COUNT_USER_PROMPT = "How many regions are in this image of non-crossing closed curves?"
+REGION_COUNT_USER_PROMPT = "How many shapes are in this image?"
 
 __all__ = [
     "MATH_SYSTEM_PROMPT",

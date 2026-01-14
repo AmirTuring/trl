@@ -7,8 +7,7 @@ to analyze images of non-crossing closed curves and either:
 2. Generate the region-adjacency tree (tree mode)
 
 Reward functions:
-1. Format reward: Ensures proper <think></think> + <answer></answer> format
-2. Task reward: Either num_nodes correctness or tree correctness
+- Task reward: Either num_nodes correctness or tree correctness
 
 Features:
 - Vision-language model support with multimodal dataset handling
@@ -62,7 +61,6 @@ from trl import (
 from reward_funcs import (
     tree_correctness_reward,
     num_nodes_reward,
-    think_answer_format_reward,
 )
 
 # Import prompts
@@ -466,11 +464,11 @@ def grpo_region_tree_function(
     logger.info(f"Setting up reward functions for task_mode: {script_args.task_mode}")
     
     if script_args.task_mode == "num_nodes":
-        reward_functions = [think_answer_format_reward, num_nodes_reward]
-        logger.info("Using: think_answer_format_reward + num_nodes_reward")
+        reward_functions = [num_nodes_reward]
+        logger.info("Using: num_nodes_reward")
     else:
-        reward_functions = [think_answer_format_reward, tree_correctness_reward]
-        logger.info("Using: think_answer_format_reward + tree_correctness_reward")
+        reward_functions = [tree_correctness_reward]
+        logger.info("Using: tree_correctness_reward")
 
     ################
     # Training
