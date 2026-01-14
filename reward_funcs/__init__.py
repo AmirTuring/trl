@@ -11,6 +11,18 @@ from dotenv import load_dotenv
 from .base import BaseRewardFunction
 from .format_reward import FormatReward
 from .accuracy_reward import AccuracyReward, LLMJudgeEvaluator, LLMJudgeConfig
+from .region_tree_reward import (
+    TreeCorrectnessReward,
+    NumNodesReward,
+    ThinkAnswerFormatReward,
+    tree_correctness_reward,
+    num_nodes_reward,
+    think_answer_format_reward,
+    parse_tree_from_completion,
+    parse_num_nodes_from_completion,
+    extract_answer_content,
+    normalize_tree,
+)
 from .serialization import (
     serialize_reward_function,
     deserialize_reward_function,
@@ -69,5 +81,16 @@ __all__ = [
     'serialize_reward_function',
     'deserialize_reward_function',
     'create_serializable_reward_wrapper',
-    'make_trl_rewards_serializable'
+    'make_trl_rewards_serializable',
+    # Region tree rewards
+    'TreeCorrectnessReward',
+    'NumNodesReward',
+    'ThinkAnswerFormatReward',
+    'tree_correctness_reward',
+    'num_nodes_reward',
+    'think_answer_format_reward',
+    'parse_tree_from_completion',
+    'parse_num_nodes_from_completion',
+    'extract_answer_content',
+    'normalize_tree',
 ]

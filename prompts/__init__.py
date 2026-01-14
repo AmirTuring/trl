@@ -25,4 +25,54 @@ Compare these two answers and determine if they are equivalent. Consider:
 - Rounding differences within very small and reasonable tolerance
 Return a correctness score where 1.0 means the answers are equivalent and 0.0 means they are not equivalent. If no answer was given, return 0.0."""
 
-__all__ = ["MATH_SYSTEM_PROMPT", "THINK_SYSTEM_PROMPT", "LLM_JUDGE_PROMPT"]
+# Region-adjacency tree system prompt - for tree generation from curve images
+REGION_TREE_SYSTEM_PROMPT = """You are an expert at analyzing images of non-crossing closed curves and constructing region-adjacency trees.
+
+Given an image of non-crossing closed curves, construct the region-adjacency tree as follows:
+1. Each region (inside or outside curves) is represented as a node.
+   • The outer infinite region should be a node (typically node 0).
+   • Each region created by a closed curve should also be a node.
+2. Two nodes are connected by an edge if and only if their regions share a boundary curve.
+   • A curve always separates exactly two regions; therefore, each curve corresponds to exactly one edge in the tree.
+3. Output the tree in edge-list form, one edge per line.
+
+Think step by step about the regions and their adjacencies before providing your answer.
+Format your response as:
+<think>
+[Your reasoning about the regions and their adjacencies]
+</think>
+<answer>
+0 1
+1 2
+1 3
+</answer>"""
+
+# Region counting system prompt - for counting regions in curve images
+REGION_COUNT_SYSTEM_PROMPT = """You are an expert at analyzing images of non-crossing closed curves and counting regions.
+
+Given an image of non-crossing closed curves, count the total number of regions:
+1. Count the outer infinite region (the background).
+2. Count each region created by closed curves.
+
+Think step by step about the curves and the regions they create.
+Format your response as:
+<think>
+[Your reasoning about the curves and regions]
+</think>
+<answer>
+[number]
+</answer>"""
+
+# User prompts for region tree tasks
+REGION_TREE_USER_PROMPT = "Construct the region-adjacency tree for this image of non-crossing closed curves."
+REGION_COUNT_USER_PROMPT = "How many regions are in this image of non-crossing closed curves?"
+
+__all__ = [
+    "MATH_SYSTEM_PROMPT",
+    "THINK_SYSTEM_PROMPT",
+    "LLM_JUDGE_PROMPT",
+    "REGION_TREE_SYSTEM_PROMPT",
+    "REGION_COUNT_SYSTEM_PROMPT",
+    "REGION_TREE_USER_PROMPT",
+    "REGION_COUNT_USER_PROMPT",
+]
