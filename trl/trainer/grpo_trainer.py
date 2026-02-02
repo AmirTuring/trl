@@ -1525,8 +1525,10 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
-        self._logs["prompt"].extend(gather_object(prompts_text))
-        self._logs["completion"].extend(gather_object(completions_text))
+        gathered_prompts = gather_object(prompts_text)
+        gathered_completions = gather_object(completions_text)
+        self._logs["prompt"].extend(gathered_prompts)
+        self._logs["completion"].extend(gathered_completions)
         for i, name in enumerate(self.reward_func_names):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
@@ -1534,8 +1536,8 @@ class GRPOTrainer(Trainer):
         if has_targets:
             self._logs["target"].extend(gather_object(targets))
         else:
-            # Add None values to maintain alignment with other logs
-            self._logs["target"].extend([None] * len(prompts_text))
+            # Add None values to maintain alignment with other logs (use gathered length for multi-GPU)
+            self._logs["target"].extend([None] * len(gathered_prompts))
 
         if has_images:
             self._logs["image"].extend(gather_object(images))
@@ -1834,18 +1836,55 @@ class GRPOTrainer(Trainer):
             if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
                 import pandas as pd
 
+                # Convert deques to lists and ensure consistent lengths
+                prompts = list(self._logs["prompt"])
+                completions = list(self._logs["completion"])
+                targets = list(self._logs["target"])
+                advantages = list(self._logs["advantages"])
+                rewards = {k: list(v) for k, v in self._logs["rewards"].items()}
+
+                # Use prompts length as the reference
+                n = len(prompts)
+
+                # Pad or truncate other arrays to match prompts length
+                if len(completions) < n:
+                    completions.extend([""] * (n - len(completions)))
+                elif len(completions) > n:
+                    completions = completions[:n]
+
+                if len(targets) < n:
+                    targets.extend([None] * (n - len(targets)))
+                elif len(targets) > n:
+                    targets = targets[:n]
+
+                if len(advantages) < n:
+                    advantages.extend([0.0] * (n - len(advantages)))
+                elif len(advantages) > n:
+                    advantages = advantages[:n]
+
+                for k in rewards:
+                    if len(rewards[k]) < n:
+                        rewards[k].extend([0.0] * (n - len(rewards[k])))
+                    elif len(rewards[k]) > n:
+                        rewards[k] = rewards[k][:n]
+
                 table = {
-                    "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
-                    "prompt": self._logs["prompt"],
-                    "completion": self._logs["completion"],
-                    "target": self._logs["target"],
-                    **self._logs["rewards"],
-                    "advantage": self._logs["advantages"],
+                    "step": [str(self.state.global_step)] * n,
+                    "prompt": prompts,
+                    "completion": completions,
+                    "target": targets,
+                    **rewards,
+                    "advantage": advantages,
                 }
 
                 if self._logs["image"]:
+                    images = list(self._logs["image"])
+                    if len(images) < n:
+                        images.extend([None] * (n - len(images)))
+                    elif len(images) > n:
+                        images = images[:n]
                     table["image"] = []
-                    for img in self._logs["image"]:
+                    for img in images:
                         if img is not None:
                             # Convert images to wandb Image objects for proper visualization
                             table["image"].append(wandb.Image(img))

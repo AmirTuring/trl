@@ -1542,16 +1542,53 @@ def print_prompt_completions_sample(
         table.add_column(reward_name, style="bold cyan", justify="right")
     table.add_column("Advantage", style="bold magenta", justify="right")
 
+    # Convert all inputs to lists if they're deques or other sequence types (for multi-GPU compatibility)
+    prompts = list(prompts)
+    completions = list(completions)
+    advantages = list(advantages)
+    rewards = {key: list(val) for key, val in rewards.items()}
+    if targets is not None:
+        targets = list(targets)
+
+    # Use prompts length as reference and align all other arrays
+    n = len(prompts)
+
+    # Pad or truncate completions
+    if len(completions) < n:
+        completions.extend([""] * (n - len(completions)))
+    elif len(completions) > n:
+        completions = completions[:n]
+
+    # Pad or truncate advantages
+    if len(advantages) < n:
+        advantages.extend([0.0] * (n - len(advantages)))
+    elif len(advantages) > n:
+        advantages = advantages[:n]
+
+    # Pad or truncate rewards
+    for key in rewards:
+        if len(rewards[key]) < n:
+            rewards[key].extend([0.0] * (n - len(rewards[key])))
+        elif len(rewards[key]) > n:
+            rewards[key] = rewards[key][:n]
+
+    # Pad or truncate targets
+    if targets is not None:
+        if len(targets) < n:
+            targets.extend([None] * (n - len(targets)))
+        elif len(targets) > n:
+            targets = targets[:n]
+
     # Some basic input validation
     if num_samples is not None:
-        if num_samples >= len(prompts):
+        if num_samples >= n:
             num_samples = None
         elif num_samples <= 0:
             return
 
     # Subsample data if num_samples is specified
     if num_samples is not None:
-        indices = random.sample(range(len(prompts)), num_samples)
+        indices = random.sample(range(n), num_samples)
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}

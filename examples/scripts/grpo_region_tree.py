@@ -38,6 +38,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Avoid fork warning with multiprocessing
 
 import torch
 import wandb

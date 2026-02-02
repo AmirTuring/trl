@@ -89,27 +89,73 @@ def parse_num_nodes_from_completion(content: str) -> Optional[int]:
         return None
 
 
-def are_trees_isomorphic(edges1: List[Tuple[int, int]], 
-                         edges2: List[Tuple[int, int]]) -> bool:
+def get_rooted_tree_canonical_form(G: nx.Graph, root: int) -> tuple:
     """
-    Check if two trees are isomorphic.
+    Compute a canonical form for a tree rooted at a specific node.
     
-    Two trees are isomorphic if they have the same structure, meaning
-    one can be obtained from the other by relabeling nodes.
+    This creates a tuple representation of the tree structure that is
+    invariant to node relabeling (except for the root which is fixed).
+    Two trees rooted at their respective roots are isomorphic iff their
+    canonical forms are equal.
+    
+    Args:
+        G: NetworkX graph representing the tree
+        root: The root node
+        
+    Returns:
+        A nested tuple representing the canonical form of the rooted tree
+    """
+    if root not in G:
+        return None
+    
+    def get_subtree_canonical(node: int, parent: int) -> tuple:
+        """Recursively compute canonical form of subtree."""
+        children = [n for n in G.neighbors(node) if n != parent]
+        if not children:
+            return ()
+        # Get canonical forms of all child subtrees and sort them
+        child_forms = sorted(get_subtree_canonical(c, node) for c in children)
+        return tuple(child_forms)
+    
+    return get_subtree_canonical(root, -1)
+
+
+def are_trees_isomorphic(edges1: List[Tuple[int, int]], 
+                         edges2: List[Tuple[int, int]],
+                         root_must_match: bool = True) -> bool:
+    """
+    Check if two trees are isomorphic with node 0 as a fixed root.
+    
+    Two trees are considered isomorphic if:
+    1. They have the same structure (standard graph isomorphism)
+    2. Node 0 has the same role in both trees (rooted isomorphism)
+    
+    This means the trees must look identical when viewed from node 0 as the root,
+    even though other nodes may be relabeled.
     
     Args:
         edges1: First tree as list of (node1, node2) tuples
         edges2: Second tree as list of (node1, node2) tuples
+        root_must_match: If True, requires node 0 to have the same position
+                        in both trees (default True)
         
     Returns:
-        True if trees are isomorphic, False otherwise
+        True if trees are isomorphic with matching roots, False otherwise
         
     Examples:
+        >>> # Same structure, node 0 has same role (degree 2, same subtree structure)
         >>> edges1 = [(0, 1), (0, 2), (1, 3)]
         >>> edges2 = [(0, 2), (0, 1), (2, 3)]
         >>> are_trees_isomorphic(edges1, edges2)
         True
         
+        >>> # Same structure but node 0 has different role
+        >>> edges1 = [(0, 1), (1, 2), (1, 3)]  # node 0 is a leaf
+        >>> edges2 = [(0, 1), (0, 2), (2, 3)]  # node 0 has degree 2
+        >>> are_trees_isomorphic(edges1, edges2)
+        False
+        
+        >>> # Different structure
         >>> edges1 = [(0, 1), (0, 2)]
         >>> edges2 = [(0, 1), (1, 2)]
         >>> are_trees_isomorphic(edges1, edges2)
@@ -133,8 +179,26 @@ def are_trees_isomorphic(edges1: List[Tuple[int, int]],
     if len(G1.edges) != len(G2.edges):
         return False
     
-    # Use NetworkX isomorphism checker
-    return nx.is_isomorphic(G1, G2)
+    # First check basic isomorphism
+    if not nx.is_isomorphic(G1, G2):
+        return False
+    
+    if not root_must_match:
+        return True
+    
+    # Check that node 0 exists in both graphs
+    if 0 not in G1.nodes or 0 not in G2.nodes:
+        # If neither has node 0, they could still be isomorphic
+        if 0 not in G1.nodes and 0 not in G2.nodes:
+            return True
+        return False
+    
+    # Check rooted isomorphism: node 0 must have the same structural role
+    # Compare canonical forms of trees rooted at node 0
+    canonical1 = get_rooted_tree_canonical_form(G1, 0)
+    canonical2 = get_rooted_tree_canonical_form(G2, 0)
+    
+    return canonical1 == canonical2
 
 
 def tree_correctness_reward(completions, tree: list[list[int]], **kwargs) -> list[float]:
