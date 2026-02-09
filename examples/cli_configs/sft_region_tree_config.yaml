@@ -4,13 +4,13 @@
 
 # Dataset configuration - CurveBench
 datasets:
-  - path: AmirMohseni/curvebench
-    split: train
+  - path: AmirMohseni/CurveBench-Easy
+    split: total_train
 
 # Validation dataset
 validation_datasets:
-  - path: AmirMohseni/curvebench
-    split: val
+  - path: AmirMohseni/CurveBench-Easy
+    split: total_validation
 
 # Field mapping - map dataset fields
 field_mapping:
@@ -48,8 +48,8 @@ save_total_limit: 3
 
 # Evaluation configuration
 eval_strategy: steps
-eval_steps: 50
-eval_on_start: false
+eval_steps: 25
+eval_on_start: true
 
 # Script-specific arguments
 dataset_seed: 42
