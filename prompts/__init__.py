@@ -25,27 +25,30 @@ Compare these two answers and determine if they are equivalent. Consider:
 - Rounding differences within very small and reasonable tolerance
 Return a correctness score where 1.0 means the answers are equivalent and 0.0 means they are not equivalent. If no answer was given, return 0.0."""
 
-# Region-adjacency tree system prompt - for tree generation from curve images
-REGION_TREE_SYSTEM_PROMPT = """You are an expert at analyzing images of non-crossing closed curves and constructing region-adjacency trees.
+# Region-adjacency tree system prompt - CurveBench format (matches CurveBench-Hard)
+REGION_TREE_SYSTEM_PROMPT = """Analyze this image and extract the hierarchical tree structure representing the nested regions.
 
-Given an image of non-crossing closed curves, construct the region-adjacency tree as follows:
-1. Each region (inside or outside curves) is represented as a node.
-   • The outer infinite region should be a node (typically node 0).
-   • Each region created by a closed curve should also be a node.
-2. Two nodes are connected by an edge if and only if their regions share a boundary curve.
-   • A curve always separates exactly two regions; therefore, each curve corresponds to exactly one edge in the tree.
-3. Output the tree in edge-list form, one edge per line.
+The image contains nested shapes/regions. Your task is to identify the parent-child relationships between these regions.
+
+Return the tree structure as a list of edges, where each edge is represented as (parent, child).
+- The root node is always 0
+- Each region is assigned a unique node number
+- Edges represent parent-child relationships (a parent region contains a child region)
+
+Format your response inside <answer>...</answer> tags.
+- The first line should be the number of nodes (excluding the root).
+- Each subsequent line should be "u v" meaning an edge from v to u (v is the parent, u is the child).
+
+Example:
+<answer>
+3
+1 0
+2 0
+3 1
+</answer>
 
 Think step by step about the regions and their adjacencies before providing your answer.
-Format your response as:
-<think>
-[Your reasoning about the regions and their adjacencies]
-</think>
-<answer>
-0 1
-1 2
-1 3
-</answer>"""
+Format: <think>[reasoning]</think> followed by <answer>...</answer>"""
 
 # Shape counting system prompt - for counting shapes/curves in images
 REGION_COUNT_SYSTEM_PROMPT = """You are an expert at analyzing images of non-crossing closed curves and counting shapes.

@@ -17,7 +17,6 @@ from .base import BaseRewardFunction
 def extract_answer_content(content: str) -> Optional[str]:
     """
     Extract content from <answer></answer> tags.
-    
     Returns the content inside the tags, or None if not found.
     """
     pattern = r"<answer>\s*(.*?)\s*</answer>"
@@ -27,178 +26,75 @@ def extract_answer_content(content: str) -> Optional[str]:
     return None
 
 
-def parse_tree_from_completion(content: str) -> list[tuple[int, int]]:
+def parse_answer_format(text: str) -> Optional[Tuple[int, List[Tuple[int, int]]]]:
     """
-    Parse the tree edge list from the model's completion.
-    
-    Extracts from <answer></answer> tags only.
-    
-    Expects format like:
-    <answer>
-    0 1
-    1 2
-    1 3
-    </answer>
-    
-    Returns a list of tuples representing edges, or empty list if parsing fails.
+    Parse <answer>...</answer> format (CurveBench-Hard).
+    First line: number of nodes (excluding root).
+    Subsequent lines: "u v" (edge from v to u, v is parent, u is child).
+    Returns (num_nodes, list of (parent, child) tuples), or None if parsing fails.
     """
+    inner = extract_answer_content(text)
+    if not inner:
+        return None
+    lines = [l.strip() for l in inner.split("\n") if l.strip()]
+    if not lines:
+        return None
+    try:
+        num_nodes = int(lines[0])
+    except ValueError:
+        return None
     edges = []
-    
-    answer_content = extract_answer_content(content)
-    if not answer_content:
-        return edges
-    
-    # Parse edges from the answer content
-    lines = answer_content.strip().split('\n')
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
+    for line in lines[1:]:
         parts = line.split()
         if len(parts) >= 2:
             try:
-                a, b = int(parts[0]), int(parts[1])
-                edges.append((a, b))
+                u, v = int(parts[0]), int(parts[1])
+                edges.append((v, u))
             except ValueError:
                 continue
-    
+    return (num_nodes, edges)
+
+
+def parse_tree_from_completion(content: str) -> list[tuple[int, int]]:
+    """
+    Parse the tree edge list from the model's completion.
+    Uses CurveBench format: first line = num_nodes (excluding root), then "u v" edges.
+    Returns list of (parent, child) tuples, or empty list if parsing fails.
+    """
+    parsed = parse_answer_format(content)
+    if parsed is None:
+        return []
+    _, edges = parsed
     return edges
 
 
 def parse_num_nodes_from_completion(content: str) -> Optional[int]:
     """
-    Parse the number of regions from the model's completion.
-    
-    Extracts from <answer></answer> tags only.
-    
-    Expects format like:
-    <answer>
-    5
-    </answer>
-    
+    Parse the number of nodes (excluding root) from the model's completion.
+    Uses CurveBench format: first line inside <answer>...</answer>.
     Returns the number, or None if parsing fails.
     """
-    answer_content = extract_answer_content(content)
-    if not answer_content:
+    parsed = parse_answer_format(content)
+    if parsed is None:
         return None
-    
-    # Parse the number from the answer content
-    try:
-        return int(answer_content.strip())
-    except ValueError:
-        return None
+    num_nodes, _ = parsed
+    return num_nodes
 
 
-def get_rooted_tree_canonical_form(G: nx.Graph, root: int) -> tuple:
+def are_trees_isomorphic(edges1: List[Tuple[int, int]], edges2: List[Tuple[int, int]]) -> bool:
     """
-    Compute a canonical form for a tree rooted at a specific node.
-    
-    This creates a tuple representation of the tree structure that is
-    invariant to node relabeling (except for the root which is fixed).
-    Two trees rooted at their respective roots are isomorphic iff their
-    canonical forms are equal.
-    
-    Args:
-        G: NetworkX graph representing the tree
-        root: The root node
-        
-    Returns:
-        A nested tuple representing the canonical form of the rooted tree
+    Check if two trees are isomorphic using NetworkX.
+    Two trees are isomorphic if they have the same structure (CurveBench-Hard).
     """
-    if root not in G:
-        return None
-    
-    def get_subtree_canonical(node: int, parent: int) -> tuple:
-        """Recursively compute canonical form of subtree."""
-        children = [n for n in G.neighbors(node) if n != parent]
-        if not children:
-            return ()
-        # Get canonical forms of all child subtrees and sort them
-        child_forms = sorted(get_subtree_canonical(c, node) for c in children)
-        return tuple(child_forms)
-    
-    return get_subtree_canonical(root, -1)
-
-
-def are_trees_isomorphic(edges1: List[Tuple[int, int]], 
-                         edges2: List[Tuple[int, int]],
-                         root_must_match: bool = True) -> bool:
-    """
-    Check if two trees are isomorphic with node 0 as a fixed root.
-    
-    Two trees are considered isomorphic if:
-    1. They have the same structure (standard graph isomorphism)
-    2. Node 0 has the same role in both trees (rooted isomorphism)
-    
-    This means the trees must look identical when viewed from node 0 as the root,
-    even though other nodes may be relabeled.
-    
-    Args:
-        edges1: First tree as list of (node1, node2) tuples
-        edges2: Second tree as list of (node1, node2) tuples
-        root_must_match: If True, requires node 0 to have the same position
-                        in both trees (default True)
-        
-    Returns:
-        True if trees are isomorphic with matching roots, False otherwise
-        
-    Examples:
-        >>> # Same structure, node 0 has same role (degree 2, same subtree structure)
-        >>> edges1 = [(0, 1), (0, 2), (1, 3)]
-        >>> edges2 = [(0, 2), (0, 1), (2, 3)]
-        >>> are_trees_isomorphic(edges1, edges2)
-        True
-        
-        >>> # Same structure but node 0 has different role
-        >>> edges1 = [(0, 1), (1, 2), (1, 3)]  # node 0 is a leaf
-        >>> edges2 = [(0, 1), (0, 2), (2, 3)]  # node 0 has degree 2
-        >>> are_trees_isomorphic(edges1, edges2)
-        False
-        
-        >>> # Different structure
-        >>> edges1 = [(0, 1), (0, 2)]
-        >>> edges2 = [(0, 1), (1, 2)]
-        >>> are_trees_isomorphic(edges1, edges2)
-        False
-    """
-    # Handle empty trees (single node - root only)
     if not edges1 and not edges2:
         return True
     if not edges1 or not edges2:
         return False
-    
-    # Create undirected graphs from edge lists (trees are undirected)
     G1 = nx.Graph(edges1)
     G2 = nx.Graph(edges2)
-    
-    # Check if they have the same number of nodes
-    if len(G1.nodes) != len(G2.nodes):
+    if len(G1.nodes) != len(G2.nodes) or len(G1.edges) != len(G2.edges):
         return False
-    
-    # Check if they have the same number of edges
-    if len(G1.edges) != len(G2.edges):
-        return False
-    
-    # First check basic isomorphism
-    if not nx.is_isomorphic(G1, G2):
-        return False
-    
-    if not root_must_match:
-        return True
-    
-    # Check that node 0 exists in both graphs
-    if 0 not in G1.nodes or 0 not in G2.nodes:
-        # If neither has node 0, they could still be isomorphic
-        if 0 not in G1.nodes and 0 not in G2.nodes:
-            return True
-        return False
-    
-    # Check rooted isomorphism: node 0 must have the same structural role
-    # Compare canonical forms of trees rooted at node 0
-    canonical1 = get_rooted_tree_canonical_form(G1, 0)
-    canonical2 = get_rooted_tree_canonical_form(G2, 0)
-    
-    return canonical1 == canonical2
+    return nx.is_isomorphic(G1, G2)
 
 
 def tree_correctness_reward(completions, tree: list[list[int]], **kwargs) -> list[float]:

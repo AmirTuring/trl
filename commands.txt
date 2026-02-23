@@ -16,3 +16,6 @@ accelerate launch --config_file accelerate_config.yaml examples/scripts/grpo_reg
 
 # CurveBench - Region Count Training (num_nodes counting task)
 accelerate launch --config_file accelerate_config.yaml examples/scripts/grpo_region_tree.py --config examples/cli_configs/grpo_region_tree_num_nodes_config.yaml
+
+# CurveBench - SFT
+accelerate launch --config_file accelerate_config.yaml examples/scripts/sft_region_tree.py --config examples/cli_configs/sft_region_tree_config.yaml

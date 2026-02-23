@@ -161,11 +161,12 @@ def extract_and_format_data(row, idx, field_mapping, system_prompt, user_prompt,
             "image": image,
         }
         
-        # Add task-specific target
+        # Add task-specific target(s)
         if task_mode == "num_nodes":
             result["num_nodes"] = num_nodes
         else:
             result["tree"] = tree
+            result["num_nodes"] = num_nodes
         
         return result
     except Exception as e:
@@ -440,7 +441,7 @@ def grpo_region_tree_function(
     if script_args.task_mode == "num_nodes":
         required_fields.append("num_nodes")
     else:
-        required_fields.append("tree")
+        required_fields.extend(["tree", "num_nodes"])
         
     missing_fields = [f for f in required_fields if f not in sample]
     if missing_fields:
@@ -458,6 +459,7 @@ def grpo_region_tree_function(
         logger.info(f"Sample num_nodes: {sample.get('num_nodes')}")
     else:
         logger.info(f"Sample tree: {sample.get('tree')}")
+        logger.info(f"Sample num_nodes: {sample.get('num_nodes')}")
 
     ################
     # Reward Functions
@@ -468,8 +470,8 @@ def grpo_region_tree_function(
         reward_functions = [num_nodes_reward]
         logger.info("Using: num_nodes_reward")
     else:
-        reward_functions = [tree_correctness_reward]
-        logger.info("Using: tree_correctness_reward")
+        reward_functions = [tree_correctness_reward, num_nodes_reward]
+        logger.info("Using: tree_correctness_reward, num_nodes_reward")
 
     ################
     # Training
