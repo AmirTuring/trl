@@ -26,17 +26,17 @@ trust_remote_code: true
 attn_implementation: flash_attention_2
 
 # Training configuration
-output_dir: runs/grpo-region-tree-qwen3-vl-8b-thinking
+output_dir: runs/grpo-region-tree-qwen3-vl-8b
 #num_train_epochs: 3
-max_steps: 200
+max_steps: 250
 per_device_train_batch_size: 2
-per_device_eval_batch_size: 4
+per_device_eval_batch_size: 2
 gradient_accumulation_steps: 8
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 learning_rate: 8.0e-5
-lr_scheduler_type: cosine
+lr_scheduler_type: constant
 warmup_ratio: 0.03
 bf16: true
 
@@ -44,14 +44,14 @@ bf16: true
 beta: 0.001
 loss_type: "dr_grpo"
 max_prompt_length: 4096
-max_completion_length: 4096
+max_completion_length: 2048
 num_generations: 8
 reward_weights: [0.7, 0.3]  # [tree_correctness_reward, num_nodes_reward]
 
 # VLLM configuration for fast generation
 use_vllm: true
 vllm_mode: colocate
-vllm_gpu_memory_utilization: 0.6
+vllm_gpu_memory_utilization: 0.5
 
 # Logging configuration
 logging_strategy: steps
@@ -64,7 +64,7 @@ log_completions: true
 
 # Evaluation configuration
 eval_strategy: steps
-eval_steps: 20
+eval_steps: 10
 eval_on_start: true
 
 # Script-specific arguments
@@ -73,21 +73,21 @@ task_mode: tree  # Options: 'tree' for full tree generation, 'num_nodes' for cou
 
 # PEFT/LoRA configuration
 use_peft: true
-lora_r: 2
-lora_alpha: 4
+lora_r: 4
+lora_alpha: 8
 lora_task_type: "CAUSAL_LM"
 lora_target_modules: "all-linear"
 
 # Reporting
 report_to: 
   - wandb
-run_name: grpo-region-tree-qwen3-vl-8b-thinking
+run_name: grpo-region-tree-qwen3-vl-8b
 project_name: curvebench
 
 # Hugging Face Hub (optional)
 push_to_hub: true
 hub_strategy: every_save
-hub_model_id: AmirMohseni/grpo-region-tree-qwen3-vl-8b-thinking
+hub_model_id: AmirMohseni/grpo-region-tree-qwen3-vl-8b
 
 # Additional VLM-specific optimizations
 dataloader_num_workers: 8
