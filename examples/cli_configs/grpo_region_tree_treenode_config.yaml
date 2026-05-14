@@ -1,0 +1,90 @@
+# GRPO VLM Training Configuration — model-b (Qwen3-VL-8B, tree + node count reward)
+# Reward: tree isomorphism (0.7) + node count accuracy (0.3).
+# Dataset: AmirMohseni/CurveBench-Easy
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+datasets:
+  - path: AmirMohseni/CurveBench-Easy
+    split: total_train
+
+validation_datasets:
+  - path: AmirMohseni/CurveBench-Easy
+    split: total_validation
+
+field_mapping:
+  image_field: image
+  num_nodes_field: num_nodes
+  tree_field: tree
+
+# ── Model ────────────────────────────────────────────────────────────────────
+model_name_or_path: Qwen/Qwen3-VL-8B-Thinking
+model_revision: main
+torch_dtype: bfloat16
+trust_remote_code: true
+attn_implementation: flash_attention_2
+
+# ── Training ─────────────────────────────────────────────────────────────────
+output_dir: runs/grpo-region-tree-model-b
+max_steps: 250
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 8
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+learning_rate: 8.0e-5
+lr_scheduler_type: constant
+warmup_ratio: 0.03
+bf16: true
+
+# ── GRPO ─────────────────────────────────────────────────────────────────────
+beta: 0.001
+loss_type: "dr_grpo"
+max_prompt_length: 8192
+max_completion_length: 4096
+num_generations: 8
+reward_weights: [0.7, 0.3]   # [tree_correctness_reward, num_nodes_reward]
+
+# ── vLLM (colocated fast generation) ─────────────────────────────────────────
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.5
+
+# ── Logging & saving ─────────────────────────────────────────────────────────
+logging_strategy: steps
+logging_steps: 1
+save_strategy: steps
+save_steps: 20
+save_total_limit: 3
+log_completions: true
+
+# ── Evaluation ───────────────────────────────────────────────────────────────
+eval_strategy: steps
+eval_steps: 10
+eval_on_start: true
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+dataset_seed: 42
+task_mode: tree   # 'tree' = full tree generation; 'num_nodes' = counting only
+
+# ── LoRA / PEFT ──────────────────────────────────────────────────────────────
+use_peft: true
+lora_r: 4
+lora_alpha: 8
+lora_task_type: "CAUSAL_LM"
+lora_target_modules: "all-linear"
+
+# ── Reporting ────────────────────────────────────────────────────────────────
+report_to:
+  - wandb
+run_name: grpo-region-tree-model-b-tree-node
+project_name: curvebench   # replace with your W&B project name
+
+# ── Hub ──────────────────────────────────────────────────────────────────────
+push_to_hub: false
+# hub_model_id: AmirMohseni/grpo-region-tree-model-a
+
+# ── Data loading ─────────────────────────────────────────────────────────────
+dataloader_num_workers: 8
+dataloader_pin_memory: true
+remove_unused_columns: false
