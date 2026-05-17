@@ -1,0 +1,71 @@
+# Legal Classification: contains_legal_content (binary)
+# Dataset: https://huggingface.co/datasets/AmirMohseni/WildChat-Legal-Classification-V2-Balanced
+# Target: Predict whether a conversation contains legal content (True/False)
+
+# Model configuration
+model_name_or_path: "answerdotai/ModernBERT-base"
+trust_remote_code: true
+
+# Dataset configuration
+datasets:
+  - path: "AmirMohseni/WildChat-Legal-Classification-V2-Balanced"
+    split: "train"
+
+# Validation dataset
+validation_datasets:
+  - path: "AmirMohseni/WildChat-Legal-Classification-V2-Balanced"
+    split: "val"
+
+# Label mapping
+label_mapping:
+  "False": 0
+  "True": 1
+
+# Input mode: 'full' (user + assistant messages) or 'user' (user messages only)
+input_mode: full
+
+# Field mapping
+field_mapping:
+  messages_field: "conversation"
+  label_field: "contains_legal_content"
+
+validation_field_mapping:
+  messages_field: "conversation"
+  label_field: "contains_legal_content"
+
+# Training arguments
+learning_rate: 2.0e-5
+num_train_epochs: 3
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 2
+gradient_checkpointing: false
+max_length: 4096
+bf16: true
+
+# Evaluation
+eval_strategy: "steps"
+eval_steps: 10
+load_best_model_at_end: true
+metric_for_best_model: "f1"
+
+# Logging and tracking
+logging_steps: 10
+output_dir: "runs/modernbert-contains-legal"
+run_name: "modernbert-contains-legal-full"
+project_name: "legal-classification"
+report_to: ["wandb"]
+
+# Full fine-tuning (no LoRA)
+use_peft: false
+
+# Saving
+save_strategy: "steps"
+save_steps: 200
+save_total_limit: 3
+push_to_hub: false
+
+# Advanced options
+dataloader_pin_memory: true
+dataloader_num_workers: 4
+remove_unused_columns: false

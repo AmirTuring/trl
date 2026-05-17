@@ -1,0 +1,3 @@
+python examples/scripts/legal_classifier.py --config examples/cli_configs/legal_contains_legal_config.yaml
+python examples/scripts/legal_classifier.py --config examples/cli_configs/legal_seeks_guidance_config.yaml
+python examples/scripts/legal_classifier.py --config examples/cli_configs/legal_primary_topic_config.yaml

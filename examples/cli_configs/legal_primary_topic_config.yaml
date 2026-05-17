@@ -1,0 +1,84 @@
+# Legal Classification: primary_topic (multi-class)
+# Dataset: https://huggingface.co/datasets/AmirMohseni/WildChat-Legal-Classification-V2-Balanced
+# Target: Predict the primary legal topic of a conversation
+
+# Model configuration
+model_name_or_path: "answerdotai/ModernBERT-base"
+trust_remote_code: true
+
+# Dataset configuration
+datasets:
+  - path: "AmirMohseni/WildChat-Legal-Classification-V2-Balanced"
+    split: "train"
+
+# Validation dataset
+validation_datasets:
+  - path: "AmirMohseni/WildChat-Legal-Classification-V2-Balanced"
+    split: "val"
+
+# Label mapping - all primary_topic categories from the dataset
+label_mapping:
+  "": 0
+  "BUSINESS": 1
+  "CIVIL_RIGHTS": 2
+  "CONSUMER_DEBT": 3
+  "CONTRACTS": 4
+  "CRIMINAL_JUSTICE": 5
+  "DATA_PRIVACY": 6
+  "FAMILY": 7
+  "HOUSING": 8
+  "IMMIGRATION": 9
+  "INTELLECTUAL_PROPERTY": 10
+  "INTERNATIONAL_CROSS_BORDER": 11
+  "OTHER": 12
+  "PUBLIC_BENEFITS": 13
+  "WORK": 14
+
+# Input mode: 'full' (user + assistant messages) or 'user' (user messages only)
+input_mode: full
+
+# Field mapping
+field_mapping:
+  messages_field: "conversation"
+  label_field: "primary_topic"
+
+validation_field_mapping:
+  messages_field: "conversation"
+  label_field: "primary_topic"
+
+# Training arguments
+learning_rate: 2.0e-5
+num_train_epochs: 5
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 2
+gradient_checkpointing: false
+max_length: 4096
+bf16: true
+
+# Evaluation
+eval_strategy: "steps"
+eval_steps: 10
+load_best_model_at_end: true
+metric_for_best_model: "f1"
+
+# Logging and tracking
+logging_steps: 10
+output_dir: "runs/modernbert-primary-topic"
+run_name: "modernbert-primary-topic-full"
+project_name: "legal-classification"
+report_to: ["wandb"]
+
+# Full fine-tuning (no LoRA)
+use_peft: false
+
+# Saving
+save_strategy: "steps"
+save_steps: 200
+save_total_limit: 3
+push_to_hub: false
+
+# Advanced options
+dataloader_pin_memory: true
+dataloader_num_workers: 4
+remove_unused_columns: false
