@@ -34,13 +34,13 @@ validation_field_mapping:
   label_field: "contains_legal_content"
 
 # Training arguments
-learning_rate: 2.0e-5
+learning_rate: 1.0e-5
 num_train_epochs: 3
-per_device_train_batch_size: 8
-per_device_eval_batch_size: 16
-gradient_accumulation_steps: 2
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 32
+gradient_accumulation_steps: 1
 gradient_checkpointing: false
-max_length: 4096
+max_length: 8192
 bf16: true
 
 # Evaluation
@@ -61,9 +61,9 @@ use_peft: false
 
 # Saving
 save_strategy: "steps"
-save_steps: 200
+save_steps: 10
 save_total_limit: 3
-push_to_hub: false
+push_to_hub: true
 
 # Advanced options
 dataloader_pin_memory: true
