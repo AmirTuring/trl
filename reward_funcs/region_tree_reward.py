@@ -7,9 +7,7 @@ This module contains reward functions for training VLMs on:
 """
 
 import re
-from typing import Optional, List, Tuple
-
-import networkx as nx
+from typing import Optional, List, Tuple, Dict
 
 from .base import BaseRewardFunction
 
@@ -81,28 +79,71 @@ def parse_num_nodes_from_completion(content: str) -> Optional[int]:
     return num_nodes
 
 
+def _canonical_rooted_signature(edges: List[Tuple[int, int]]):
+    """AHU signature for a directed containment tree rooted at node 0."""
+    if any(parent < 0 or child < 0 for parent, child in edges):
+        return None
+    if len(set(edges)) != len(edges):
+        return None
+    if any(parent == child for parent, child in edges):
+        return None
+    if any(child == 0 for _parent, child in edges):
+        return None
+
+    parents: Dict[int, int] = {}
+    children: Dict[int, List[int]] = {0: []}
+    nodes = {0}
+    for parent, child in edges:
+        if child in parents:
+            return None
+        parents[child] = parent
+        children.setdefault(parent, []).append(child)
+        children.setdefault(child, [])
+        nodes.update((parent, child))
+
+    non_root = nodes - {0}
+    if len(edges) != len(non_root):
+        return None
+    if any(node not in parents for node in non_root):
+        return None
+
+    visited = set()
+    stack = [0]
+    while stack:
+        node = stack.pop()
+        if node in visited:
+            return None
+        visited.add(node)
+        stack.extend(children.get(node, []))
+    if visited != nodes:
+        return None
+
+    def visit(node: int):
+        return tuple(sorted(visit(child) for child in children[node]))
+
+    return visit(0)
+
+
 def are_trees_isomorphic(edges1: List[Tuple[int, int]], edges2: List[Tuple[int, int]]) -> bool:
     """
-    Check if two trees are isomorphic using NetworkX.
-    Two trees are isomorphic if they have the same structure (CurveBench-Hard).
+    Check if two rooted containment trees are isomorphic.
+
+    Node 0 is fixed as the exterior root. Sibling order and non-root labels
+    may differ; undirected shape matching is not sufficient.
     """
-    if not edges1 and not edges2:
-        return True
-    if not edges1 or not edges2:
+    signature1 = _canonical_rooted_signature(edges1)
+    signature2 = _canonical_rooted_signature(edges2)
+    if signature1 is None or signature2 is None:
         return False
-    G1 = nx.Graph(edges1)
-    G2 = nx.Graph(edges2)
-    if len(G1.nodes) != len(G2.nodes) or len(G1.edges) != len(G2.edges):
-        return False
-    return nx.is_isomorphic(G1, G2)
+    return signature1 == signature2
 
 
 def tree_correctness_reward(completions, tree: list[list[int]], **kwargs) -> list[float]:
     """
     Reward function that checks if the predicted tree is isomorphic to the ground truth.
     
-    Uses tree isomorphism checking - two trees are considered correct if they have
-    the same structure, even if node labels differ.
+    Uses rooted unordered isomorphism with exterior root 0 fixed. Non-root labels
+    may differ; undirected shape matching alone is not enough.
     
     Args:
         completions: List of model completions (each is a list with one dict containing 'content')
